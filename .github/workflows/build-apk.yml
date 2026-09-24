@@ -22,35 +22,37 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Build Debug APK
         run: |
-          # 1. Detect directory structure (checks if files are in android/ or in root)
+          set -e
+
+          # 1. Detect directory structure (checks if in root or in android/)
           if [ -d "android" ]; then
-            echo "Entering android directory..."
+            echo "Found android/ directory, switching into it..."
             cd android
           fi
 
-          # 2. Grant permissions
-          chmod +x gradlew || true
+          # 2. Make sure wrapper directory exists
+          mkdir -p gradle/wrapper
 
-          # 3. Generate wrapper jar if it was missed during manual upload
-          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "Generating gradle wrapper..."
-            gradle wrapper --gradle-version 8.2 || true
+          # 3. Download gradle-wrapper.jar if it was skipped during manual upload
+          if [ ! -s "gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "Downloading gradle-wrapper.jar..."
+            curl -sLo gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar
           fi
 
-          # 4. Compile the APK
-          if [ -f "./gradlew" ]; then
-            ./gradlew assembleDebug --stacktrace || gradle assembleDebug --stacktrace
-          else
-            gradle assembleDebug --stacktrace
-          fi
+          # 4. Make gradlew executable
+          chmod +x gradlew
+
+          # 5. Compile Debug APK
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: TeluguSoundbox-APK
           path: |
