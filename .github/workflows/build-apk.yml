@@ -25,34 +25,31 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Set up Gradle 8.4
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.4
+
       - name: Build Debug APK
         run: |
           set -e
 
-          # 1. Detect directory structure (checks if in root or in android/)
+          # 1. Switch into android directory if present
           if [ -d "android" ]; then
-            echo "Found android/ directory, switching into it..."
+            echo "Entering android/ directory..."
             cd android
           fi
 
-          # 2. Make sure wrapper directory exists
-          mkdir -p gradle/wrapper
+          # 2. Fix Windows CRLF line endings in gradlew if uploaded from Windows
+          sed -i 's/\r$//' gradlew || true
+          chmod +x gradlew || true
 
-          # 3. Download gradle-wrapper.jar if it was skipped during manual upload
-          if [ ! -s "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "Downloading gradle-wrapper.jar..."
-            curl -sLo gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar
-          fi
-
-          # 4. Make gradlew executable
-          chmod +x gradlew
-
-          # 5. Compile Debug APK
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          # 3. Compile directly with Gradle 8.4
+          echo "Compiling APK with Gradle 8.4..."
+          gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: TeluguSoundbox-APK
           path: |
