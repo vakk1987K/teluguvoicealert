@@ -22,19 +22,38 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Grant execute permission for gradlew
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Debug APK
         run: |
-          cd android
+          # 1. Detect directory structure (checks if files are in android/ or in root)
+          if [ -d "android" ]; then
+            echo "Entering android directory..."
+            cd android
+          fi
+
+          # 2. Grant permissions
           chmod +x gradlew || true
 
-      - name: Build Debug APK with Gradle
-        run: |
-          cd android
-          ./gradlew assembleDebug --stacktrace
+          # 3. Generate wrapper jar if it was missed during manual upload
+          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "Generating gradle wrapper..."
+            gradle wrapper --gradle-version 8.2 || true
+          fi
+
+          # 4. Compile the APK
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleDebug --stacktrace || gradle assembleDebug --stacktrace
+          else
+            gradle assembleDebug --stacktrace
+          fi
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: TeluguSoundbox-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            **/app/build/outputs/apk/debug/*.apk
+            **/build/outputs/apk/debug/*.apk
           retention-days: 30
