@@ -30,7 +30,21 @@ data class PaymentSummary(
 object PaymentStorage {
     private const val PREFS_NAME = "telugu_soundbox_temp_storage"
     private const val KEY_PAYMENTS = "cached_payments_list"
-    private const val MAX_RECORDS = 250 // Fast & lightweight, uses less than 50KB
+    private const val MAX_RECORDS = 250
+
+    private var lastProcessedAmount: String = ""
+    private var lastProcessedTime: Long = 0L
+
+    @Synchronized
+    fun isDuplicate(amount: String): Boolean {
+        val now = System.currentTimeMillis()
+        if (lastProcessedAmount == amount && (now - lastProcessedTime) < 8000L) {
+            return true
+        }
+        lastProcessedAmount = amount
+        lastProcessedTime = now
+        return false
+    }
 
     private fun getPrefs(context: Context): SharedPreferences {
         return context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -144,6 +158,8 @@ object PaymentStorage {
     @Synchronized
     fun clearAll(context: Context) {
         getPrefs(context).edit().remove(KEY_PAYMENTS).apply()
+        lastProcessedAmount = ""
+        lastProcessedTime = 0L
     }
 
     private fun saveList(context: Context, list: List<StoredPayment>) {
