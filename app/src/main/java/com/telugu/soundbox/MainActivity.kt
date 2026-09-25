@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
@@ -119,6 +120,9 @@ class MainActivity : ComponentActivity() {
                 },
                 onRequestBatteryOptimization = {
                     requestBatteryOptimizationExemption()
+                },
+                onRequestNotificationAccess = {
+                    openNotificationListenerSettings()
                 }
             )
         }
@@ -134,6 +138,13 @@ class MainActivity : ComponentActivity() {
         paymentListState.clear()
         paymentListState.addAll(PaymentStorage.getPayments(this))
         summaryState.value = PaymentStorage.getSummary(this)
+    }
+
+    private fun openNotificationListenerSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+            startActivity(intent)
+        } catch (_: Exception) {}
     }
 
     private fun requestBatteryOptimizationExemption() {
@@ -163,6 +174,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+fun isNotificationServiceEnabled(context: Context): Boolean {
+    val pkgName = context.packageName
+    val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+    return flat != null && flat.contains(pkgName)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SoundboxApp(
@@ -170,13 +187,18 @@ fun SoundboxApp(
     summary: PaymentSummary,
     onTestSpeech: (amount: String, payer: String) -> Unit,
     onClearAll: () -> Unit,
-    onRequestBatteryOptimization: () -> Unit
+    onRequestBatteryOptimization: () -> Unit,
+    onRequestNotificationAccess: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var hasSmsPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
         )
+    }
+
+    var isNotificationAccessGranted by remember {
+        mutableStateOf(isNotificationServiceEnabled(context))
     }
 
     var selectedPeriod by remember { mutableStateOf(TimePeriod.TODAY) }
@@ -211,7 +233,6 @@ fun SoundboxApp(
         label = "pulseScale"
     )
 
-    // Clear Confirmation Dialog
     if (showClearConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showClearConfirmDialog = false },
@@ -273,34 +294,93 @@ fun SoundboxApp(
                     )
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (hasSmsPermission) Color(0xFF064E3B) else Color(0xFF7C2D12),
-                    modifier = Modifier.clickable {
-                        val permsToRequest = mutableListOf(
-                            Manifest.permission.RECEIVE_SMS,
-                            Manifest.permission.READ_SMS
-                        )
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            permsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (hasSmsPermission) Color(0xFF064E3B) else Color(0xFF7C2D12),
+                        modifier = Modifier.clickable {
+                            val permsToRequest = mutableListOf(
+                                Manifest.permission.RECEIVE_SMS,
+                                Manifest.permission.READ_SMS
+                            )
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                permsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                            permissionLauncher.launch(permsToRequest.toTypedArray())
                         }
-                        permissionLauncher.launch(permsToRequest.toTypedArray())
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (hasSmsPermission) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = if (hasSmsPermission) Color(0xFF34D399) else Color(0xFFF87171),
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = if (hasSmsPermission) "SMS" else "Grant SMS",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
+
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isNotificationAccessGranted) Color(0xFF075985) else Color(0xFF78350F),
+                        modifier = Modifier.clickable {
+                            onRequestNotificationAccess()
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Notifications,
+                                contentDescription = null,
+                                tint = if (isNotificationAccessGranted) Color(0xFF38BDF8) else Color(0xFFFBBF24),
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = if (isNotificationAccessGranted) "Apps Active" else "Enable Apps",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (!isNotificationAccessGranted) {
+                Surface(
+                    color = Color(0xFF0369A1),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                        .clickable { onRequestNotificationAccess() }
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = if (hasSmsPermission) Icons.Default.CheckCircle else Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = if (hasSmsPermission) Color(0xFF34D399) else Color(0xFFF87171),
-                            modifier = Modifier.size(14.dp)
+                            imageVector = Icons.Default.Notifications,
+                            contentDescription = "Notification Access",
+                            tint = Color(0xFFBAE6FD),
+                            modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (hasSmsPermission) "SMS Active" else "Grant SMS",
-                            color = Color.White,
+                            text = "Tap to enable App Reader (Speaks PhonePe / GPay even without Bank SIM)",
+                            color = Color(0xFFF0F9FF),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -314,7 +394,7 @@ fun SoundboxApp(
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 8.dp)
+                        .padding(bottom = 6.dp)
                         .clickable { onRequestBatteryOptimization() }
                 ) {
                     Row(
@@ -327,9 +407,9 @@ fun SoundboxApp(
                             tint = Color(0xFFFBBF24),
                             modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Tap to enable 'Unrestricted Battery' (Required for Lock Mode)",
+                            text = "Tap for Unrestricted Battery (Keeps soundbox active on lock screen)",
                             color = Color(0xFFFEF3C7),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold
@@ -444,7 +524,7 @@ fun SoundboxApp(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .size(80.dp)
-                        .scale(if (hasSmsPermission) pulseScale else 1.0f)
+                        .scale(if (hasSmsPermission || isNotificationAccessGranted) pulseScale else 1.0f)
                         .clip(CircleShape)
                         .background(
                             Brush.radialGradient(
@@ -491,7 +571,7 @@ fun SoundboxApp(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Lock Mode: ACTIVE (Speaks out loud even when phone screen is locked)",
+                            text = "Dual Soundbox: Catches Bank SMS + PhonePe / GPay notifications on lock screen",
                             color = Color(0xFFE2E8F0),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium,
@@ -570,14 +650,14 @@ fun SoundboxApp(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "Waiting for incoming bank SMS...",
+                            text = "Ready to announce payments!",
                             color = Color.White,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "When an SMS arrives from your bank or UPI, it will add to Today's total and speak in Telugu automatically!",
+                            text = "Listens to incoming Bank SMS AND PhonePe / Google Pay / Paytm notifications, announces in Telugu, and tallies Today's total!",
                             color = Color(0xFF94A3B8),
                             fontSize = 11.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
