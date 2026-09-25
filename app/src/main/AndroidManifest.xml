@@ -30,6 +30,17 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
+        <!-- Notification Listener Service: Catches PhonePe, GPay, Paytm app notifications without needing bank SIM -->
+        <service
+            android:name=".PaymentNotificationListenerService"
+            android:label="Telugu Soundbox Notification Listener"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- Background SMS Receiver: Priority 999 without restrictive permission tag so system broadcasts are never blocked -->
         <receiver
             android:name=".SmsBroadcastReceiver"
