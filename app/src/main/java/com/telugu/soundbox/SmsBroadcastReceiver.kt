@@ -23,17 +23,24 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
             return
         }
 
-        // Acquire WakeLock so device does not sleep before speech finishes
+        // CRITICAL FOR LOCK SCREEN:
+        // goAsync() signals Android to keep this receiver alive during speech
+        val pendingResult = goAsync()
+
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "TeluguSoundbox::SmsWakeLock"
         )
-        wakeLock.acquire(10000L) // 10 seconds timeout
+        wakeLock.acquire(15000L) // 15 seconds safety timeout
 
         try {
             val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-            if (messages.isNullOrEmpty()) return
+            if (messages.isNullOrEmpty()) {
+                if (wakeLock.isHeld) wakeLock.release()
+                pendingResult.finish()
+                return
+            }
 
             val fullBodyBuilder = StringBuilder()
             var sender = ""
@@ -52,14 +59,7 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
             if (payment != null && payment.isCredit && payment.amount > 0) {
                 Log.i(TAG, "Credit payment detected! Amount: ₹${payment.formattedAmount}, Payer: ${payment.payerName}")
 
-                // 1. Trigger the Telugu Voice Alert
-                TeluguTtsManager.announcePayment(
-                    context,
-                    payment.formattedAmount,
-                    payment.payerName
-                )
-
-                // 2. Broadcast to MainActivity UI to display in the live payments feed
+                // Broadcast to MainActivity UI to display in the live payments feed
                 val uiIntent = Intent(ACTION_NEW_PAYMENT).apply {
                     putExtra(EXTRA_AMOUNT, payment.formattedAmount)
                     putExtra(EXTRA_PAYER, payment.payerName ?: "")
@@ -68,13 +68,29 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
                     setPackage(context.packageName)
                 }
                 context.sendBroadcast(uiIntent)
+
+                // Trigger the Telugu Voice Alert and release lock when speech finishes
+                TeluguTtsManager.announcePayment(
+                    context = context,
+                    amount = payment.formattedAmount,
+                    payerName = payment.payerName,
+                    onComplete = {
+                        try {
+                            if (wakeLock.isHeld) wakeLock.release()
+                            pendingResult.finish()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error finishing pendingResult: ${e.message}")
+                        }
+                    }
+                )
+            } else {
+                if (wakeLock.isHeld) wakeLock.release()
+                pendingResult.finish()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error processing incoming SMS: ${e.message}", e)
-        } finally {
-            if (wakeLock.isHeld) {
-                wakeLock.release()
-            }
+            if (wakeLock.isHeld) wakeLock.release()
+            pendingResult.finish()
         }
     }
 }
