@@ -10,7 +10,7 @@ import android.util.Log
 class PaymentNotificationListenerService : NotificationListenerService() {
 
     companion object {
-        private const val TAG = "PaymentNotificationListener"
+        private const val TAG = "SoundboxNotification"
 
         private val MONITORED_PACKAGES = setOf(
             "com.phonepe.app",
@@ -27,6 +27,16 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         )
     }
 
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        Log.i(TAG, "Telugu Soundbox Notification Listener CONNECTED successfully to Android OS!")
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        Log.w(TAG, "Telugu Soundbox Notification Listener disconnected from Android OS")
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
 
@@ -36,21 +46,29 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         val isMonitoredApp = MONITORED_PACKAGES.contains(packageName) ||
                 packageName.contains("upi", ignoreCase = true) ||
                 packageName.contains("pay", ignoreCase = true) ||
-                packageName.contains("bank", ignoreCase = true)
+                packageName.contains("bank", ignoreCase = true) ||
+                packageName.contains("paisa", ignoreCase = true)
 
         val extras = notification.extras ?: return
+
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
+        val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString() ?: ""
+        val titleBig = extras.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString() ?: ""
+        val ticker = notification.tickerText?.toString() ?: ""
 
-        val combinedContent = "$title $text $bigText".trim()
+        val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+            ?.joinToString(" ") { it.toString() } ?: ""
+
+        val combinedContent = "$title $titleBig $text $bigText $subText $lines $ticker".trim()
         if (combinedContent.isBlank()) return
 
-        Log.d(TAG, "Notification received from [$packageName]: $combinedContent")
+        Log.d(TAG, "Processing notification from [$packageName]: $combinedContent")
 
         val defaultProvider = when {
             packageName.contains("phonepe") -> "PhonePe"
-            packageName.contains("paisa") -> "Google Pay"
+            packageName.contains("paisa") || packageName.contains("google") -> "Google Pay"
             packageName.contains("paytm") -> "Paytm"
             packageName.contains("bharatpe") -> "BharatPe"
             packageName.contains("bhim") -> "BHIM UPI"
@@ -59,7 +77,6 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
         val payment = TransactionParser.parse(combinedContent, defaultProvider)
         if (payment != null && payment.isCredit && payment.amount > 0) {
-            // Deduplication: if bank SMS already triggered this within 8s, skip
             if (PaymentStorage.isDuplicate(payment.formattedAmount)) {
                 Log.d(TAG, "Duplicate payment detected from notification, skipping voice alert")
                 return
@@ -83,12 +100,13 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 rawText = combinedContent
             )
 
+            // Fixed: broadcast target set to applicationContext.packageName
             val uiIntent = Intent(SmsBroadcastReceiver.ACTION_NEW_PAYMENT).apply {
                 putExtra(SmsBroadcastReceiver.EXTRA_AMOUNT, payment.formattedAmount)
                 putExtra(SmsBroadcastReceiver.EXTRA_PAYER, payment.payerName ?: "")
                 putExtra(SmsBroadcastReceiver.EXTRA_BANK, payment.bank)
                 putExtra(SmsBroadcastReceiver.EXTRA_TEXT, combinedContent)
-                setPackage(packageName)
+                setPackage(applicationContext.packageName)
             }
             sendBroadcast(uiIntent)
 
