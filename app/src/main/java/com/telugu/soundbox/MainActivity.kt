@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeUp
@@ -45,28 +46,25 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
-data class PaymentItem(
-    val amount: String,
-    val payer: String,
-    val bank: String,
-    val time: String,
-    val rawText: String
-)
+enum class TimePeriod {
+    TODAY, SEVEN_DAYS, THIRTY_DAYS
+}
 
 class MainActivity : ComponentActivity() {
 
-    private val paymentListState = mutableStateListOf<PaymentItem>()
+    private val paymentListState = mutableStateListOf<StoredPayment>()
+    private var summaryState = mutableStateOf(
+        PaymentSummary(
+            today = PeriodSummary(0.0, 0),
+            sevenDays = PeriodSummary(0.0, 0),
+            thirtyDays = PeriodSummary(0.0, 0)
+        )
+    )
 
     private val paymentReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == SmsBroadcastReceiver.ACTION_NEW_PAYMENT) {
-                val amount = intent.getStringExtra(SmsBroadcastReceiver.EXTRA_AMOUNT) ?: "0"
-                val payer = intent.getStringExtra(SmsBroadcastReceiver.EXTRA_PAYER) ?: ""
-                val bank = intent.getStringExtra(SmsBroadcastReceiver.EXTRA_BANK) ?: "Bank"
-                val raw = intent.getStringExtra(SmsBroadcastReceiver.EXTRA_TEXT) ?: ""
-
-                val timeStr = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
-                paymentListState.add(0, PaymentItem(amount, payer, bank, timeStr, raw))
+                refreshData()
             }
         }
     }
@@ -74,7 +72,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Keep screen awake while in foreground & allow showing over lockscreen
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -87,13 +84,9 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        // Initialize Telugu TTS Engine
         TeluguTtsManager.init(this)
-
-        // Start Foreground Service so soundbox stays alive 24/7 on lockscreen
         SoundboxForegroundService.startService(this)
 
-        // Register broadcast receiver for live UI payments feed
         val filter = IntentFilter(SmsBroadcastReceiver.ACTION_NEW_PAYMENT)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(paymentReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -101,11 +94,28 @@ class MainActivity : ComponentActivity() {
             registerReceiver(paymentReceiver, filter)
         }
 
+        refreshData()
+
         setContent {
             SoundboxApp(
                 payments = paymentListState,
+                summary = summaryState.value,
                 onTestSpeech = { amount, payer ->
+                    val amtDouble = amount.toDoubleOrNull() ?: 0.0
+                    PaymentStorage.addPayment(
+                        context = this,
+                        amount = amtDouble,
+                        formattedAmount = amount,
+                        payerName = payer,
+                        bank = "Test / UPI",
+                        rawText = "Payment received of Rs $amount from $payer"
+                    )
+                    refreshData()
                     TeluguTtsManager.announcePayment(this, amount, payer)
+                },
+                onClearAll = {
+                    PaymentStorage.clearAll(this)
+                    refreshData()
                 },
                 onRequestBatteryOptimization = {
                     requestBatteryOptimizationExemption()
@@ -117,6 +127,13 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         SoundboxForegroundService.startService(this)
+        refreshData()
+    }
+
+    private fun refreshData() {
+        paymentListState.clear()
+        paymentListState.addAll(PaymentStorage.getPayments(this))
+        summaryState.value = PaymentStorage.getSummary(this)
     }
 
     private fun requestBatteryOptimizationExemption() {
@@ -149,8 +166,10 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SoundboxApp(
-    payments: List<PaymentItem>,
+    payments: List<StoredPayment>,
+    summary: PaymentSummary,
     onTestSpeech: (amount: String, payer: String) -> Unit,
+    onClearAll: () -> Unit,
     onRequestBatteryOptimization: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -159,6 +178,9 @@ fun SoundboxApp(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
         )
     }
+
+    var selectedPeriod by remember { mutableStateOf(TimePeriod.TODAY) }
+    var showClearConfirmDialog by remember { mutableStateOf(false) }
 
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as? PowerManager }
     var isBatteryOptIgnored by remember {
@@ -189,19 +211,51 @@ fun SoundboxApp(
         label = "pulseScale"
     )
 
+    // Clear Confirmation Dialog
+    if (showClearConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmDialog = false },
+            title = { Text("Erase Temporary Records?", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "This will clear the Today, 7-Day, and 30-Day total collection counters and recent payments list. No complex database is used.",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onClearAll()
+                        showClearConfirmDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
+                ) {
+                    Text("Yes, Clear All", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmDialog = false }) {
+                    Text("Cancel", color = Color(0xFF94A3B8))
+                }
+            },
+            containerColor = Color(0xFF1E293B)
+        )
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = Color(0xFF0F172A) // Slate-900
+        color = Color(0xFF0F172A)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Header
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 12.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -219,7 +273,6 @@ fun SoundboxApp(
                     )
                 }
 
-                // SMS Permission Status Badge
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = if (hasSmsPermission) Color(0xFF064E3B) else Color(0xFF7C2D12),
@@ -255,44 +308,17 @@ fun SoundboxApp(
                 }
             }
 
-            // Lock Screen 24/7 Status Bar
-            Surface(
-                color = Color(0xFF1E293B),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Lock,
-                        contentDescription = "Lock Screen Audio",
-                        tint = Color(0xFF38BDF8),
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Lock Screen Audio: ACTIVE (Speaks when screen is OFF)",
-                        color = Color(0xFFE2E8F0),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-
-            // Battery Optimization (Unrestricted) Button if not yet allowed
             if (!isBatteryOptIgnored) {
                 Surface(
-                    color = Color(0xFF78350F), // Amber-900
+                    color = Color(0xFF78350F),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 10.dp)
+                        .padding(bottom = 8.dp)
                         .clickable { onRequestBatteryOptimization() }
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -312,105 +338,220 @@ fun SoundboxApp(
                 }
             }
 
-            // Big Interactive Speaker Disc
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .padding(vertical = 6.dp)
-                    .size(150.dp)
-                    .scale(if (hasSmsPermission) pulseScale else 1.0f)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(Color(0xFF10B981), Color(0xFF065F46), Color(0xFF022C22))
-                        )
-                    )
-                    .border(3.dp, Color(0xFF34D399), CircleShape)
-                    .clickable {
-                        onTestSpeech("500", "రమేష్ కుమార్")
-                    }
+            // --- MERCHANT SUMMARY CARD (Today / 7 Days / 30 Days) ---
+            Surface(
+                color = Color(0xFF1E293B),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Default.VolumeUp,
-                        contentDescription = "Speaker",
-                        tint = Color.White,
-                        modifier = Modifier.size(42.dp)
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "LIVE LISTENER",
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    )
-                    Text(
-                        text = "Tap to Test Alert",
-                        color = Color(0xFFA7F3D0),
-                        fontSize = 9.sp
-                    )
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            PeriodTab(
+                                label = "Today (ఈరోజు)",
+                                isSelected = selectedPeriod == TimePeriod.TODAY,
+                                onClick = { selectedPeriod = TimePeriod.TODAY }
+                            )
+                            PeriodTab(
+                                label = "7 Days",
+                                isSelected = selectedPeriod == TimePeriod.SEVEN_DAYS,
+                                onClick = { selectedPeriod = TimePeriod.SEVEN_DAYS }
+                            )
+                            PeriodTab(
+                                label = "30 Days",
+                                isSelected = selectedPeriod == TimePeriod.THIRTY_DAYS,
+                                onClick = { selectedPeriod = TimePeriod.THIRTY_DAYS }
+                            )
+                        }
+
+                        IconButton(
+                            onClick = { showClearConfirmDialog = true },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Clear Records",
+                                tint = Color(0xFF94A3B8),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    val currentSummary = when (selectedPeriod) {
+                        TimePeriod.TODAY -> summary.today
+                        TimePeriod.SEVEN_DAYS -> summary.sevenDays
+                        TimePeriod.THIRTY_DAYS -> summary.thirtyDays
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        Column {
+                            Text(
+                                text = "TOTAL RECEIVED",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = if (currentSummary.totalAmount % 1.0 == 0.0) {
+                                    "₹ ${currentSummary.totalAmount.toInt()}"
+                                } else {
+                                    "₹ ${String.format("%.2f", currentSummary.totalAmount)}"
+                                },
+                                color = Color(0xFF34D399),
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF0F172A)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${currentSummary.totalOrders} Orders",
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
-            // Quick Test Presets
-            Text(
-                text = "TEST VOICE ANNOUNCEMENT:",
-                color = Color(0xFF94A3B8),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.Start).padding(top = 8.dp, bottom = 4.dp)
-            )
-
+            // Interactive Speaker Disc & Lock Screen Notice
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(80.dp)
+                        .scale(if (hasSmsPermission) pulseScale else 1.0f)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(Color(0xFF10B981), Color(0xFF065F46), Color(0xFF022C22))
+                            )
+                        )
+                        .border(2.dp, Color(0xFF34D399), CircleShape)
+                        .clickable {
+                            onTestSpeech("500", "రమేష్")
+                        }
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.VolumeUp,
+                            contentDescription = "Speaker",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Text(
+                            text = "TEST",
+                            color = Color(0xFFA7F3D0),
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(10.dp))
+
+                Surface(
+                    color = Color(0xFF1E293B),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "Lock Screen Audio",
+                            tint = Color(0xFF38BDF8),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Lock Mode: ACTIVE (Speaks out loud even when phone screen is locked)",
+                            color = Color(0xFFE2E8F0),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            lineHeight = 13.sp
+                        )
+                    }
+                }
+            }
+
+            // Quick Test Buttons (Adds to count & speaks)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Button(
                     onClick = { onTestSpeech("500", "రమేష్") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("₹500 (రమేష్)", fontSize = 11.sp, color = Color(0xFF34D399))
+                    Text("+ ₹500", fontSize = 11.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
                 }
 
                 Button(
                     onClick = { onTestSpeech("2000", "సురేష్") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("₹2,000 (సురేష్)", fontSize = 11.sp, color = Color(0xFF38BDF8))
+                    Text("+ ₹2,000", fontSize = 11.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
                 }
 
                 Button(
-                    onClick = { onTestSpeech("750", "") },
+                    onClick = { onTestSpeech("150", "ప్రియా") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("₹750 (Direct)", fontSize = 11.sp, color = Color(0xFFFDE047))
+                    Text("+ ₹150", fontSize = 11.sp, color = Color(0xFFFDE047), fontWeight = FontWeight.Bold)
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Recent In-App Live Payments Feed
+            // Recent Payments List
             Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "RECEIVED PAYMENTS (${payments.size})",
+                    text = "RECENT PAYMENTS (${payments.size})",
                     color = Color(0xFF94A3B8),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
                 if (payments.isNotEmpty()) {
                     Text(
-                        text = "Auto-Read From SMS",
+                        text = "Auto-Synced",
                         color = Color(0xFF10B981),
                         fontSize = 10.sp
                     )
@@ -424,7 +565,7 @@ fun SoundboxApp(
                     modifier = Modifier.fillMaxWidth().weight(1f)
                 ) {
                     Column(
-                        modifier = Modifier.fillMaxSize().padding(16.dp),
+                        modifier = Modifier.fillMaxSize().padding(14.dp),
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
@@ -434,9 +575,9 @@ fun SoundboxApp(
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "When an SMS arrives from your bank or UPI with credited amount, it will automatically speak in Telugu — even if the phone screen is locked!",
+                            text = "When an SMS arrives from your bank or UPI, it will add to Today's total and speak in Telugu automatically!",
                             color = Color(0xFF94A3B8),
                             fontSize = 11.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -446,31 +587,36 @@ fun SoundboxApp(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(payments) { item ->
+                        val timeStr = java.text.SimpleDateFormat(
+                            "dd MMM, hh:mm a",
+                            java.util.Locale.getDefault()
+                        ).format(java.util.Date(item.timestamp))
+
                         Surface(
                             color = Color(0xFF1E293B),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
-                                modifier = Modifier.padding(12.dp),
+                                modifier = Modifier.padding(10.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
-                                            text = "₹${item.amount}",
+                                            text = "₹${item.formattedAmount}",
                                             color = Color(0xFF34D399),
-                                            fontSize = 16.sp,
+                                            fontSize = 15.sp,
                                             fontWeight = FontWeight.Bold
                                         )
-                                        if (item.payer.isNotBlank()) {
+                                        if (item.payerName.isNotBlank()) {
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(
-                                                text = "from ${item.payer}",
+                                                text = "from ${item.payerName}",
                                                 color = Color.White,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Medium
@@ -478,17 +624,21 @@ fun SoundboxApp(
                                         }
                                     }
                                     Text(
-                                        text = "${item.bank} • ${item.time}",
+                                        text = "${item.bank} • $timeStr",
                                         color = Color(0xFF94A3B8),
                                         fontSize = 10.sp
                                     )
                                 }
 
-                                IconButton(onClick = { onTestSpeech(item.amount, item.payer) }) {
+                                IconButton(
+                                    onClick = { onTestSpeech(item.formattedAmount, item.payerName) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
                                     Icon(
                                         imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Replay",
-                                        tint = Color(0xFF34D399)
+                                        contentDescription = "Replay Voice",
+                                        tint = Color(0xFF34D399),
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
@@ -497,5 +647,26 @@ fun SoundboxApp(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun PeriodTab(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = if (isSelected) Color(0xFF10B981) else Color(0xFF0F172A),
+        modifier = Modifier.clickable { onClick() }
+    ) {
+        Text(
+            text = label,
+            color = if (isSelected) Color.White else Color(0xFF94A3B8),
+            fontSize = 11.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+        )
     }
 }
