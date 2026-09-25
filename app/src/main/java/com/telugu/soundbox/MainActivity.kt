@@ -6,8 +6,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -22,7 +26,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
@@ -50,7 +56,6 @@ data class PaymentItem(
 class MainActivity : ComponentActivity() {
 
     private val paymentListState = mutableStateListOf<PaymentItem>()
-    private var isPlayingVoiceState = mutableStateOf(false)
 
     private val paymentReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -69,10 +74,26 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize Telugu TTS
+        // Keep screen awake while in foreground & allow showing over lockscreen
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
+
+        // Initialize Telugu TTS Engine
         TeluguTtsManager.init(this)
 
-        // Register local broadcast receiver for UI updates
+        // Start Foreground Service so soundbox stays alive 24/7 on lockscreen
+        SoundboxForegroundService.startService(this)
+
+        // Register broadcast receiver for live UI payments feed
         val filter = IntentFilter(SmsBroadcastReceiver.ACTION_NEW_PAYMENT)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(paymentReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -85,8 +106,35 @@ class MainActivity : ComponentActivity() {
                 payments = paymentListState,
                 onTestSpeech = { amount, payer ->
                     TeluguTtsManager.announcePayment(this, amount, payer)
+                },
+                onRequestBatteryOptimization = {
+                    requestBatteryOptimizationExemption()
                 }
             )
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        SoundboxForegroundService.startService(this)
+    }
+
+    private fun requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                }
+            } catch (e: Exception) {
+                try {
+                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    startActivity(intent)
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -95,7 +143,6 @@ class MainActivity : ComponentActivity() {
         try {
             unregisterReceiver(paymentReceiver)
         } catch (_: Exception) {}
-        TeluguTtsManager.shutdown()
     }
 }
 
@@ -103,7 +150,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun SoundboxApp(
     payments: List<PaymentItem>,
-    onTestSpeech: (amount: String, payer: String) -> Unit
+    onTestSpeech: (amount: String, payer: String) -> Unit,
+    onRequestBatteryOptimization: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var hasSmsPermission by remember {
@@ -112,10 +160,22 @@ fun SoundboxApp(
         )
     }
 
+    val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as? PowerManager }
+    var isBatteryOptIgnored by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && powerManager != null) {
+                powerManager.isIgnoringBatteryOptimizations(context.packageName)
+            } else true
+        )
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
         hasSmsPermission = perms[Manifest.permission.RECEIVE_SMS] == true
+        if (hasSmsPermission) {
+            SoundboxForegroundService.startService(context)
+        }
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -141,7 +201,7 @@ fun SoundboxApp(
         ) {
             // Header
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 16.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -153,18 +213,25 @@ fun SoundboxApp(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "తెలుగు చెల్లింపు సౌండ్‌బాక్స్ (Native Android)",
+                        text = "తెలుగు చెల్లింపు సౌండ్‌బాక్స్",
                         color = Color(0xFF10B981),
                         fontSize = 12.sp
                     )
                 }
 
-                // Permission Badge
+                // SMS Permission Status Badge
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = if (hasSmsPermission) Color(0xFF064E3B) else Color(0xFF7C2D12),
                     modifier = Modifier.clickable {
-                        permissionLauncher.launch(arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS))
+                        val permsToRequest = mutableListOf(
+                            Manifest.permission.RECEIVE_SMS,
+                            Manifest.permission.READ_SMS
+                        )
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            permsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        permissionLauncher.launch(permsToRequest.toTypedArray())
                     }
                 ) {
                     Row(
@@ -188,12 +255,69 @@ fun SoundboxApp(
                 }
             }
 
+            // Lock Screen 24/7 Status Bar
+            Surface(
+                color = Color(0xFF1E293B),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Lock Screen Audio",
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Lock Screen Audio: ACTIVE (Speaks when screen is OFF)",
+                        color = Color(0xFFE2E8F0),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            // Battery Optimization (Unrestricted) Button if not yet allowed
+            if (!isBatteryOptIgnored) {
+                Surface(
+                    color = Color(0xFF78350F), // Amber-900
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp)
+                        .clickable { onRequestBatteryOptimization() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BatteryChargingFull,
+                            contentDescription = "Battery Warning",
+                            tint = Color(0xFFFBBF24),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Tap to enable 'Unrestricted Battery' (Required for Lock Mode)",
+                            color = Color(0xFFFEF3C7),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
             // Big Interactive Speaker Disc
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .padding(vertical = 12.dp)
-                    .size(170.dp)
+                    .padding(vertical = 6.dp)
+                    .size(150.dp)
                     .scale(if (hasSmsPermission) pulseScale else 1.0f)
                     .clip(CircleShape)
                     .background(
@@ -211,9 +335,9 @@ fun SoundboxApp(
                         imageVector = Icons.Default.VolumeUp,
                         contentDescription = "Speaker",
                         tint = Color.White,
-                        modifier = Modifier.size(48.dp)
+                        modifier = Modifier.size(42.dp)
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = "LIVE LISTENER",
                         color = Color.White,
@@ -235,7 +359,7 @@ fun SoundboxApp(
                 color = Color(0xFF94A3B8),
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.Start).padding(top = 10.dp, bottom = 6.dp)
+                modifier = Modifier.align(Alignment.Start).padding(top = 8.dp, bottom = 4.dp)
             )
 
             Row(
@@ -270,7 +394,7 @@ fun SoundboxApp(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Recent In-App Live Payments Feed
             Row(
@@ -312,7 +436,7 @@ fun SoundboxApp(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "When an SMS arrives from your bank or UPI with credited amount, it will automatically appear here and speak in Telugu!",
+                            text = "When an SMS arrives from your bank or UPI with credited amount, it will automatically speak in Telugu — even if the phone screen is locked!",
                             color = Color(0xFF94A3B8),
                             fontSize = 11.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
