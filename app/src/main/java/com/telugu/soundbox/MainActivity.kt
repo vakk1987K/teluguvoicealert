@@ -2,6 +2,7 @@ package com.telugu.soundbox
 
 import android.Manifest
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -11,6 +12,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.service.notification.NotificationListenerService
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -114,6 +117,21 @@ class MainActivity : ComponentActivity() {
                     refreshData()
                     TeluguTtsManager.announcePayment(this, amount, payer)
                 },
+                onSimulateNotification = { sampleText, provider ->
+                    val payment = TransactionParser.parse(sampleText, provider)
+                    if (payment != null) {
+                        PaymentStorage.addPayment(
+                            context = this,
+                            amount = payment.amount,
+                            formattedAmount = payment.formattedAmount,
+                            payerName = payment.payerName,
+                            bank = payment.bank,
+                            rawText = sampleText
+                        )
+                        refreshData()
+                        TeluguTtsManager.announcePayment(this, payment.formattedAmount, payment.payerName)
+                    }
+                },
                 onClearAll = {
                     PaymentStorage.clearAll(this)
                     refreshData()
@@ -131,6 +149,18 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         SoundboxForegroundService.startService(this)
+
+        // Force Android OS to bind to the NotificationListenerService if enabled
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isNotificationServiceEnabled(this)) {
+            try {
+                val componentName = ComponentName(this, PaymentNotificationListenerService::class.java)
+                NotificationListenerService.requestRebind(componentName)
+                Log.i("MainActivity", "Requested rebind for PaymentNotificationListenerService")
+            } catch (e: Exception) {
+                Log.w("MainActivity", "requestRebind exception: ${e.message}")
+            }
+        }
+
         refreshData()
     }
 
@@ -186,6 +216,7 @@ fun SoundboxApp(
     payments: List<StoredPayment>,
     summary: PaymentSummary,
     onTestSpeech: (amount: String, payer: String) -> Unit,
+    onSimulateNotification: (text: String, provider: String) -> Unit,
     onClearAll: () -> Unit,
     onRequestBatteryOptimization: () -> Unit,
     onRequestNotificationAccess: () -> Unit
@@ -239,7 +270,7 @@ fun SoundboxApp(
             title = { Text("Erase Temporary Records?", color = Color.White, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "This will clear the Today, 7-Day, and 30-Day total collection counters and recent payments list. No complex database is used.",
+                    "This will clear the Today, 7-Day, and 30-Day total collection counters and recent payments list.",
                     color = Color(0xFFCBD5E1),
                     fontSize = 13.sp
                 )
@@ -533,7 +564,7 @@ fun SoundboxApp(
                         )
                         .border(2.dp, Color(0xFF34D399), CircleShape)
                         .clickable {
-                            onTestSpeech("500", "రమేష్")
+                            onTestSpeech("210", "రమేష్")
                         }
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -571,7 +602,7 @@ fun SoundboxApp(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Dual Soundbox: Catches Bank SMS + PhonePe / GPay notifications on lock screen",
+                            text = "Dual Soundbox: Listens to Bank SMS + GPay / PhonePe / Paytm notifications",
                             color = Color(0xFFE2E8F0),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium,
@@ -581,39 +612,39 @@ fun SoundboxApp(
                 }
             }
 
-            // Quick Test Buttons (Adds to count & speaks)
+            // Quick Simulation Buttons (Test GPay, PhonePe, and Custom values)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Button(
-                    onClick = { onTestSpeech("500", "రమేష్") },
+                    onClick = { onSimulateNotification("Ramesh Kumar paid you ₹210 on Google Pay", "Google Pay") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("+ ₹500", fontSize = 11.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
+                    Text("GPay ₹210", fontSize = 10.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
                 }
 
                 Button(
-                    onClick = { onTestSpeech("2000", "సురేష్") },
+                    onClick = { onSimulateNotification("Payment of ₹500 received from Suresh", "PhonePe") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("+ ₹2,000", fontSize = 11.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
+                    Text("PhonePe ₹500", fontSize = 10.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
                 }
 
                 Button(
-                    onClick = { onTestSpeech("150", "ప్రియా") },
+                    onClick = { onSimulateNotification("Money received: ₹100 from Priya", "Paytm") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("+ ₹150", fontSize = 11.sp, color = Color(0xFFFDE047), fontWeight = FontWeight.Bold)
+                    Text("Paytm ₹100", fontSize = 10.sp, color = Color(0xFFFDE047), fontWeight = FontWeight.Bold)
                 }
             }
 
