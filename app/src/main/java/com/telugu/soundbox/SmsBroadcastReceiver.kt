@@ -23,8 +23,6 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
             return
         }
 
-        // CRITICAL FOR LOCK SCREEN:
-        // goAsync() signals Android to keep this receiver alive during speech
         val pendingResult = goAsync()
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -32,7 +30,9 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
             PowerManager.PARTIAL_WAKE_LOCK,
             "TeluguSoundbox::SmsWakeLock"
         )
-        wakeLock.acquire(15000L) // 15 seconds safety timeout
+        wakeLock.acquire(15000L)
+
+        SoundboxForegroundService.startService(context)
 
         try {
             val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
@@ -59,7 +59,16 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
             if (payment != null && payment.isCredit && payment.amount > 0) {
                 Log.i(TAG, "Credit payment detected! Amount: ₹${payment.formattedAmount}, Payer: ${payment.payerName}")
 
-                // Broadcast to MainActivity UI to display in the live payments feed
+                // Save to lightweight temporary storage
+                PaymentStorage.addPayment(
+                    context = context,
+                    amount = payment.amount,
+                    formattedAmount = payment.formattedAmount,
+                    payerName = payment.payerName,
+                    bank = payment.bank,
+                    rawText = payment.rawText
+                )
+
                 val uiIntent = Intent(ACTION_NEW_PAYMENT).apply {
                     putExtra(EXTRA_AMOUNT, payment.formattedAmount)
                     putExtra(EXTRA_PAYER, payment.payerName ?: "")
@@ -69,14 +78,15 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
                 }
                 context.sendBroadcast(uiIntent)
 
-                // Trigger the Telugu Voice Alert and release lock when speech finishes
                 TeluguTtsManager.announcePayment(
                     context = context,
                     amount = payment.formattedAmount,
                     payerName = payment.payerName,
                     onComplete = {
                         try {
-                            if (wakeLock.isHeld) wakeLock.release()
+                            if (wakeLock.isHeld) {
+                                wakeLock.release()
+                            }
                             pendingResult.finish()
                         } catch (e: Exception) {
                             Log.w(TAG, "Error finishing pendingResult: ${e.message}")
