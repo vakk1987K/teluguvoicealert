@@ -2,6 +2,7 @@ package com.telugu.soundbox
 
 import android.app.Notification
 import android.content.Intent
+import android.os.Build
 import android.os.PowerManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -30,6 +31,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         Log.i(TAG, "Telugu Soundbox Notification Listener CONNECTED successfully to Android OS!")
+        SoundboxForegroundService.startService(applicationContext)
     }
 
     override fun onListenerDisconnected() {
@@ -61,7 +63,11 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
             ?.joinToString(" ") { it.toString() } ?: ""
 
-        val combinedContent = "$title $titleBig $text $bigText $subText $lines $ticker".trim()
+        val publicNotification = notification.publicVersion
+        val publicText = publicNotification?.extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+        val publicTitle = publicNotification?.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+
+        val combinedContent = "$title $titleBig $text $bigText $subText $lines $ticker $publicTitle $publicText".trim()
         if (combinedContent.isBlank()) return
 
         Log.d(TAG, "Processing notification from [$packageName]: $combinedContent")
@@ -89,7 +95,9 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "TeluguSoundbox::NotificationWakeLock"
             )
-            wakeLock.acquire(15000L)
+            wakeLock.acquire(20000L)
+
+            SoundboxForegroundService.startService(applicationContext)
 
             PaymentStorage.addPayment(
                 context = applicationContext,
@@ -100,7 +108,6 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 rawText = combinedContent
             )
 
-            // Fixed: broadcast target set to applicationContext.packageName
             val uiIntent = Intent(SmsBroadcastReceiver.ACTION_NEW_PAYMENT).apply {
                 putExtra(SmsBroadcastReceiver.EXTRA_AMOUNT, payment.formattedAmount)
                 putExtra(SmsBroadcastReceiver.EXTRA_PAYER, payment.payerName ?: "")
@@ -109,6 +116,19 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 setPackage(applicationContext.packageName)
             }
             sendBroadcast(uiIntent)
+
+            try {
+                val launchIntent = Intent(applicationContext, MainActivity::class.java).apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    )
+                }
+                applicationContext.startActivity(launchIntent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not bring MainActivity to lockscreen: ${e.message}")
+            }
 
             TeluguTtsManager.announcePayment(
                 context = applicationContext,
