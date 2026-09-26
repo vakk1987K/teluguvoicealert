@@ -37,40 +37,42 @@ object TeluguTtsManager {
         }
 
         val appContext = context.applicationContext
-        tts = TextToSpeech(appContext) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                val teluguLocale = Locale("te", "IN")
-                val result = tts?.setLanguage(teluguLocale)
-                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    Log.w(TAG, "Telugu voice data not installed, falling back to default locale")
-                    tts?.language = Locale.getDefault()
-                } else {
-                    Log.i(TAG, "Telugu TTS engine initialized successfully!")
-                }
-
-                // Use Media stream so volume buttons on the phone control the loudness
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    val audioAttributes = AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                    tts?.setAudioAttributes(audioAttributes)
-                }
-
-                tts?.setSpeechRate(0.95f)
-                tts?.setPitch(1.0f)
-
-                isInitialized = true
-                onReady?.invoke()
-
-                synchronized(pendingQueue) {
-                    for ((text, callback) in pendingQueue) {
-                        speakText(appContext, text, callback)
+        mainHandler.post {
+            tts = TextToSpeech(appContext) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    val teluguLocale = Locale("te", "IN")
+                    val result = tts?.setLanguage(teluguLocale)
+                    if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        Log.w(TAG, "Telugu voice data not installed, falling back to default locale")
+                        tts?.language = Locale.getDefault()
+                    } else {
+                        Log.i(TAG, "Telugu TTS engine initialized successfully!")
                     }
-                    pendingQueue.clear()
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        val audioAttributes = AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
+                            .build()
+                        tts?.setAudioAttributes(audioAttributes)
+                    }
+
+                    tts?.setSpeechRate(0.95f)
+                    tts?.setPitch(1.0f)
+
+                    isInitialized = true
+                    onReady?.invoke()
+
+                    synchronized(pendingQueue) {
+                        for ((text, callback) in pendingQueue) {
+                            speakText(appContext, text, callback)
+                        }
+                        pendingQueue.clear()
+                    }
+                } else {
+                    Log.e(TAG, "Failed to initialize TextToSpeech: status=$status")
                 }
-            } else {
-                Log.e(TAG, "Failed to initialize TextToSpeech: status=$status")
             }
         }
     }
@@ -83,23 +85,18 @@ object TeluguTtsManager {
     ) {
         val appContext = context.applicationContext
 
-        // 1. Wake the CPU and screen so sound plays instantly on lock screen
         wakeUpDevice(appContext)
-
-        // 2. Ensure media volume is sufficiently loud
         ensureAudibleVolume(appContext)
 
-        // 3. Build Telugu announcement
         val teluguSentence = if (!payerName.isNullOrBlank()) {
             "$payerName నుండి $amount రూపాయలు మీ ఖాతాలో జమ అయ్యాయి."
         } else {
             "మీ ఖాతాలో $amount రూపాయలు జమ అయ్యాయి."
         }
 
-        // 4. Play Chime then Speak
         CoroutineScope(Dispatchers.IO).launch {
             playPaymentChime(appContext)
-            CoroutineScope(Dispatchers.Main).launch {
+            mainHandler.post {
                 if (!isInitialized || tts == null) {
                     init(appContext) {
                         speakText(appContext, teluguSentence, onComplete)
@@ -129,6 +126,7 @@ object TeluguTtsManager {
             synchronized(pendingQueue) {
                 pendingQueue.add(Pair(text, onComplete))
             }
+            init(context)
             return
         }
 
@@ -193,7 +191,7 @@ object TeluguTtsManager {
                     "TeluguSoundbox::AudioPlaybackLock"
                 ).apply {
                     setReferenceCounted(false)
-                    acquire(15000L)
+                    acquire(20000L)
                 }
             }
 
@@ -204,7 +202,7 @@ object TeluguTtsManager {
                         PowerManager.ON_AFTER_RELEASE,
                 "TeluguSoundbox::ScreenWake"
             )
-            screenWakeLock.acquire(5000L)
+            screenWakeLock.acquire(6000L)
         } catch (e: Exception) {
             Log.w(TAG, "Could not acquire wake lock: ${e.message}")
         }
@@ -217,8 +215,9 @@ object TeluguTtsManager {
                 val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
                     .setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                             .build()
                     )
                     .build()
@@ -274,8 +273,9 @@ object TeluguTtsManager {
             val audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                         .build()
                 )
                 .setAudioFormat(
@@ -291,17 +291,10 @@ object TeluguTtsManager {
 
             audioTrack.write(buffer, 0, buffer.size)
             audioTrack.play()
-            Thread.sleep(durationMs.toLong() + 50)
+            Thread.sleep(durationMs.toLong() + 50L)
             audioTrack.release()
         } catch (e: Exception) {
-            Log.w(TAG, "AudioTrack chime playback error: ${e.message}")
+            Log.w(TAG, "Chime generation failed: ${e.message}")
         }
-    }
-
-    fun shutdown() {
-        tts?.stop()
-        tts?.shutdown()
-        tts = null
-        isInitialized = false
     }
 }
