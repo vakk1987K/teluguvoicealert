@@ -2,7 +2,6 @@ package com.telugu.soundbox
 
 import android.app.Notification
 import android.content.Intent
-import android.os.Build
 import android.os.PowerManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -26,17 +25,19 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             "com.whatsapp",
             "in.amazon.mShop.android.shopping"
         )
+
+        private val recentNotificationKeys = mutableMapOf<String, Long>()
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        Log.i(TAG, "Telugu Soundbox Notification Listener CONNECTED successfully to Android OS!")
+        Log.i(TAG, "UPI Sound Box Notification Listener CONNECTED successfully to Android OS!")
         SoundboxForegroundService.startService(applicationContext)
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
-        Log.w(TAG, "Telugu Soundbox Notification Listener disconnected from Android OS")
+        Log.w(TAG, "UPI Sound Box Notification Listener disconnected from Android OS")
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -44,6 +45,21 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
         val packageName = sbn.packageName ?: return
         val notification = sbn.notification ?: return
+
+        // Deduplication of identical notification updates:
+        val notifKey = "${sbn.key}_${sbn.id}"
+        val now = System.currentTimeMillis()
+        synchronized(recentNotificationKeys) {
+            val lastSeen = recentNotificationKeys[notifKey]
+            if (lastSeen != null && (now - lastSeen) < 15000L) {
+                Log.d(TAG, "Skipping notification update for existing key $notifKey")
+                return
+            }
+            recentNotificationKeys[notifKey] = now
+            if (recentNotificationKeys.size > 100) {
+                recentNotificationKeys.clear()
+            }
+        }
 
         val isMonitoredApp = MONITORED_PACKAGES.contains(packageName) ||
                 packageName.contains("upi", ignoreCase = true) ||
@@ -81,10 +97,27 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             else -> ""
         }
 
+        // Parse payment details
         val payment = TransactionParser.parse(combinedContent, defaultProvider)
         if (payment != null && payment.isCredit && payment.amount > 0) {
+            // Deduplication: if Bank SMS or prior notification already processed this within 35s, skip!
             if (PaymentStorage.isDuplicate(payment.formattedAmount)) {
-                Log.d(TAG, "Duplicate payment detected from notification, skipping voice alert")
+                Log.d(TAG, "Duplicate payment detected from notification (₹${payment.formattedAmount}), skipping voice alert")
+                return
+            }
+
+            // Save to lightweight storage. If addPayment returns null, it was an existing duplicate -> skip!
+            val addedPayment = PaymentStorage.addPayment(
+                context = applicationContext,
+                amount = payment.amount,
+                formattedAmount = payment.formattedAmount,
+                payerName = payment.payerName,
+                bank = payment.bank,
+                rawText = combinedContent
+            )
+
+            if (addedPayment == null) {
+                Log.d(TAG, "Payment of ₹${payment.formattedAmount} was already added, skipping duplicate voice & UI update")
                 return
             }
 
@@ -98,15 +131,6 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             wakeLock.acquire(20000L)
 
             SoundboxForegroundService.startService(applicationContext)
-
-            PaymentStorage.addPayment(
-                context = applicationContext,
-                amount = payment.amount,
-                formattedAmount = payment.formattedAmount,
-                payerName = payment.payerName,
-                bank = payment.bank,
-                rawText = combinedContent
-            )
 
             val uiIntent = Intent(SmsBroadcastReceiver.ACTION_NEW_PAYMENT).apply {
                 putExtra(SmsBroadcastReceiver.EXTRA_AMOUNT, payment.formattedAmount)
