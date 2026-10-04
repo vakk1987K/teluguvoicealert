@@ -24,6 +24,7 @@ data class PeriodSummary(
 data class PaymentSummary(
     val today: PeriodSummary,
     val sevenDays: PeriodSummary,
+    val fifteenDays: PeriodSummary,
     val thirtyDays: PeriodSummary
 )
 
@@ -38,7 +39,7 @@ object PaymentStorage {
     @Synchronized
     fun isDuplicate(amount: String): Boolean {
         val now = System.currentTimeMillis()
-        if (lastProcessedAmount == amount && (now - lastProcessedTime) < 8000L) {
+        if (lastProcessedAmount == amount && (now - lastProcessedTime) < 4000L) {
             return true
         }
         lastProcessedAmount = amount
@@ -122,6 +123,7 @@ object PaymentStorage {
         }.timeInMillis
 
         val sevenDaysAgo = now - (7L * 24 * 60 * 60 * 1000)
+        val fifteenDaysAgo = now - (15L * 24 * 60 * 60 * 1000)
         val thirtyDaysAgo = now - (30L * 24 * 60 * 60 * 1000)
 
         var todaySum = 0.0
@@ -129,6 +131,9 @@ object PaymentStorage {
 
         var sevenDaySum = 0.0
         var sevenDayCount = 0
+
+        var fifteenDaySum = 0.0
+        var fifteenDayCount = 0
 
         var thirtyDaySum = 0.0
         var thirtyDayCount = 0
@@ -142,6 +147,10 @@ object PaymentStorage {
                 sevenDaySum += p.amount
                 sevenDayCount++
             }
+            if (p.timestamp >= fifteenDaysAgo) {
+                fifteenDaySum += p.amount
+                fifteenDayCount++
+            }
             if (p.timestamp >= thirtyDaysAgo) {
                 thirtyDaySum += p.amount
                 thirtyDayCount++
@@ -151,6 +160,7 @@ object PaymentStorage {
         return PaymentSummary(
             today = PeriodSummary(todaySum, todayCount),
             sevenDays = PeriodSummary(sevenDaySum, sevenDayCount),
+            fifteenDays = PeriodSummary(fifteenDaySum, fifteenDayCount),
             thirtyDays = PeriodSummary(thirtyDaySum, thirtyDayCount)
         )
     }
