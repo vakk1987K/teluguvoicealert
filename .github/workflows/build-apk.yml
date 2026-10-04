@@ -31,15 +31,22 @@ jobs:
         run: |
           set -e
 
+          # 1. Switch into android directory if present
           if [ -d "android" ]; then
             echo "Entering android/ directory..."
             cd android
           fi
 
+          # 2. Fix Windows CRLF line endings in gradlew if uploaded from Windows
           sed -i 's/\r$//' gradlew || true
           chmod +x gradlew || true
 
-          echo "Building APK and Play Store AAB with Gradle 8.4..."
+          # 3. Create persistent Production Release Keystore for Play Store
+          echo "Setting up Release Signing Keystore..."
+          echo "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" | base64 -d > app/release.keystore
+
+          # 4. Compile both APK (for testing) and Production Release AAB (for Google Play Console)
+          echo "Building APK and Play Store Release AAB with Gradle 8.4..."
           gradle assembleDebug bundleRelease --no-daemon --stacktrace
 
       - name: Upload Testing APK
@@ -59,3 +66,11 @@ jobs:
             **/app/build/outputs/bundle/release/*.aab
             **/build/outputs/bundle/release/*.aab
           retention-days: 30
+
+      - name: Backup Release Keystore
+        uses: actions/upload-artifact@v4
+        with:
+          name: UPISoundBox-Release-Keystore
+          path: |
+            **/app/release.keystore
+          retention-days: 90
