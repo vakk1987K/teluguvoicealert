@@ -20,10 +20,135 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.sin
 
+enum class SoundboxLanguage(
+    val code: String,
+    val displayName: String,
+    val nativeName: String,
+    val locale: Locale,
+    val bannerSubtitle: String,
+    val todayLabel: String,
+    val confirmationGreeting: String
+) {
+    TELUGU(
+        code = "te",
+        displayName = "Telugu",
+        nativeName = "తెలుగు",
+        locale = Locale("te", "IN"),
+        bannerSubtitle = "తెలుగు చెల్లింపు సౌండ్‌బాక్స్",
+        todayLabel = "Today (ఈరోజు)",
+        confirmationGreeting = "తెలుగు సౌండ్‌బాక్స్ సిద్ధంగా ఉంది."
+    ),
+    HINDI(
+        code = "hi",
+        displayName = "Hindi",
+        nativeName = "हिन्दी",
+        locale = Locale("hi", "IN"),
+        bannerSubtitle = "हिंदी पेमेंट साउंडबॉक्स",
+        todayLabel = "Today (आज)",
+        confirmationGreeting = "हिंदी साउंडबॉक्स तैयार है।"
+    ),
+    MARATHI(
+        code = "mr",
+        displayName = "Marathi",
+        nativeName = "मराठी",
+        locale = Locale("mr", "IN"),
+        bannerSubtitle = "मराठी पेमेंट साउंडबॉक्स",
+        todayLabel = "Today (आज)",
+        confirmationGreeting = "मराठी साउंडबॉक्स तयार आहे."
+    ),
+    GUJARATI(
+        code = "gu",
+        displayName = "Gujarati",
+        nativeName = "ગુજરાતી",
+        locale = Locale("gu", "IN"),
+        bannerSubtitle = "ગુજરાતી પેમેન્ટ સાઉન્ડબૉક્સ",
+        todayLabel = "Today (આજે)",
+        confirmationGreeting = "ગુજરાતી સાઉન્ડબૉક્સ તૈયાર છે."
+    ),
+    TAMIL(
+        code = "ta",
+        displayName = "Tamil",
+        nativeName = "தமிழ்",
+        locale = Locale("ta", "IN"),
+        bannerSubtitle = "தமிழ் கட்டண சவுண்ட்பாக்ஸ்",
+        todayLabel = "Today (இன்று)",
+        confirmationGreeting = "தமிழ் சவுண்ட்பாக்ஸ் தயார்."
+    ),
+    ENGLISH(
+        code = "en",
+        displayName = "English",
+        nativeName = "English",
+        locale = Locale("en", "IN"),
+        bannerSubtitle = "All-in-One Payment Soundbox",
+        todayLabel = "Today",
+        confirmationGreeting = "Payment Soundbox is ready."
+    );
+
+    companion object {
+        fun fromCode(code: String): SoundboxLanguage {
+            return values().firstOrNull { it.code.equals(code, ignoreCase = true) } ?: TELUGU
+        }
+    }
+}
+
+object LanguageManager {
+    private const val PREFS_NAME = "soundbox_lang_prefs"
+    private const val KEY_LANG = "soundbox_language"
+
+    fun getLanguage(context: Context): SoundboxLanguage {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val code = prefs.getString(KEY_LANG, "te") ?: "te"
+        return SoundboxLanguage.fromCode(code)
+    }
+
+    fun setLanguage(context: Context, language: SoundboxLanguage) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_LANG, language.code).apply()
+        TeluguTtsManager.setLanguage(context, language)
+    }
+
+    fun getAnnouncementSentence(
+        language: SoundboxLanguage,
+        amount: String,
+        payerName: String?
+    ): String {
+        val hasPayer = !payerName.isNullOrBlank()
+        val cleanPayer = payerName?.trim() ?: ""
+
+        return when (language) {
+            SoundboxLanguage.TELUGU -> {
+                if (hasPayer) "$cleanPayer నుండి $amount రూపాయలు మీ ఖాతాలో జమ అయ్యాయి."
+                else "మీ ఖాతాలో $amount రూపాయలు జమ అయ్యాయి."
+            }
+            SoundboxLanguage.HINDI -> {
+                if (hasPayer) "$cleanPayer से $amount रुपये आपके खाते में प्राप्त हुए हैं।"
+                else "आपके खाते में $amount रुपये प्राप्त हुए हैं।"
+            }
+            SoundboxLanguage.MARATHI -> {
+                if (hasPayer) "$cleanPayer कडून $amount रुपये आपल्या खात्यात जमा झाले आहेत."
+                else "आपल्या खात्यात $amount रुपये जमा झाले आहेत."
+            }
+            SoundboxLanguage.GUJARATI -> {
+                if (hasPayer) "$cleanPayer તરફથી $amount રૂપિયા તમારા ખાતામાં જમા થયા છે."
+                else "તમારા ખાતામાં $amount રૂપિયા જમા થયા છે."
+            }
+            SoundboxLanguage.TAMIL -> {
+                if (hasPayer) "$cleanPayer இடமிருந்து $amount ரூபாய் உங்கள் கணக்கில் வரவு வைக்கப்பட்டது."
+                else "உங்கள் கணக்கில் $amount ரூபாய் வரவு வைக்கப்பட்டது."
+            }
+            SoundboxLanguage.ENGLISH -> {
+                if (hasPayer) "Received $amount rupees from $cleanPayer."
+                else "Received $amount rupees in your account."
+            }
+        }
+    }
+}
+
 object TeluguTtsManager {
-    private const val TAG = "TeluguTtsManager"
+    private const val TAG = "SoundboxTtsManager"
     private var tts: TextToSpeech? = null
     private var isInitialized = false
+    private var currentLanguage: SoundboxLanguage = SoundboxLanguage.TELUGU
     private val pendingQueue = mutableListOf<Pair<String, (() -> Unit)?>>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -37,17 +162,12 @@ object TeluguTtsManager {
         }
 
         val appContext = context.applicationContext
+        currentLanguage = LanguageManager.getLanguage(appContext)
+
         mainHandler.post {
             tts = TextToSpeech(appContext) { status ->
                 if (status == TextToSpeech.SUCCESS) {
-                    val teluguLocale = Locale("te", "IN")
-                    val result = tts?.setLanguage(teluguLocale)
-                    if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        Log.w(TAG, "Telugu voice data not installed, falling back to default locale")
-                        tts?.language = Locale.getDefault()
-                    } else {
-                        Log.i(TAG, "Telugu TTS engine initialized successfully!")
-                    }
+                    applyLanguage(currentLanguage)
 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                         val audioAttributes = AudioAttributes.Builder()
@@ -77,10 +197,55 @@ object TeluguTtsManager {
         }
     }
 
+    fun setLanguage(context: Context, language: SoundboxLanguage) {
+        currentLanguage = language
+        if (isInitialized && tts != null) {
+            applyLanguage(language)
+        } else {
+            init(context)
+        }
+    }
+
+    private fun applyLanguage(language: SoundboxLanguage) {
+        val result = tts?.setLanguage(language.locale)
+        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            Log.w(TAG, "Voice data for ${language.displayName} missing/unsupported, attempting country fallback")
+            val fallbackLocale = Locale(language.code)
+            val fallbackResult = tts?.setLanguage(fallbackLocale)
+            if (fallbackResult == TextToSpeech.LANG_MISSING_DATA || fallbackResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                Log.w(TAG, "Fallback locale also unsupported, keeping system default")
+                tts?.language = Locale.getDefault()
+            }
+        } else {
+            Log.i(TAG, "TTS language set to ${language.displayName} (${language.locale})")
+        }
+    }
+
+    fun previewLanguage(context: Context, language: SoundboxLanguage) {
+        val appContext = context.applicationContext
+        setLanguage(appContext, language)
+
+        wakeUpDevice(appContext)
+        ensureAudibleVolume(appContext)
+
+        mainHandler.post {
+            if (!isInitialized || tts == null) {
+                init(appContext) {
+                    applyLanguage(language)
+                    speakText(appContext, language.confirmationGreeting)
+                }
+            } else {
+                applyLanguage(language)
+                speakText(appContext, language.confirmationGreeting)
+            }
+        }
+    }
+
     fun announcePayment(
         context: Context,
         amount: String,
         payerName: String?,
+        language: SoundboxLanguage = LanguageManager.getLanguage(context),
         onComplete: (() -> Unit)? = null
     ) {
         val appContext = context.applicationContext
@@ -88,21 +253,19 @@ object TeluguTtsManager {
         wakeUpDevice(appContext)
         ensureAudibleVolume(appContext)
 
-        val teluguSentence = if (!payerName.isNullOrBlank()) {
-            "$payerName నుండి $amount రూపాయలు మీ ఖాతాలో జమ అయ్యాయి."
-        } else {
-            "మీ ఖాతాలో $amount రూపాయలు జమ అయ్యాయి."
-        }
+        val sentence = LanguageManager.getAnnouncementSentence(language, amount, payerName)
 
         CoroutineScope(Dispatchers.IO).launch {
             playPaymentChime(appContext)
             mainHandler.post {
                 if (!isInitialized || tts == null) {
                     init(appContext) {
-                        speakText(appContext, teluguSentence, onComplete)
+                        applyLanguage(language)
+                        speakText(appContext, sentence, onComplete)
                     }
                 } else {
-                    speakText(appContext, teluguSentence, onComplete)
+                    applyLanguage(language)
+                    speakText(appContext, sentence, onComplete)
                 }
             }
         }
