@@ -125,7 +125,7 @@ class MainActivity : ComponentActivity() {
                 },
                 onSimulateNotification = { text, provider ->
                     TransactionParser.parse(text, provider)?.let { result ->
-                        PaymentStorage.recordPayment(
+                        PaymentStorage.addPayment(
                             context = this,
                             amount = result.amount,
                             formattedAmount = result.formattedAmount,
