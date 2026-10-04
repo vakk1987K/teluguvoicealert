@@ -2,6 +2,7 @@ package com.telugu.soundbox
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
@@ -29,13 +30,15 @@ data class PaymentSummary(
 )
 
 object PaymentStorage {
+    private const val TAG = "PaymentStorage"
     private const val PREFS_NAME = "telugu_soundbox_temp_storage"
     private const val KEY_PAYMENTS = "cached_payments_list"
     private const val MAX_RECORDS = 250
 
-    // Deduplication window: 25 seconds prevents duplicate announcements between SMS & App notifications
+    // Deduplication window: 35 seconds ensures that if both App Notification (PhonePe/GPay)
+    // and Bank SMS arrive (often 5 to 20 seconds apart), only ONE announcement and ONE record is stored.
     private val recentProcessedAmounts = mutableMapOf<String, Long>()
-    private const val DEDUPLICATION_WINDOW_MS = 25000L
+    private const val DEDUPLICATION_WINDOW_MS = 35000L
 
     @Synchronized
     fun isDuplicate(amount: String): Boolean {
@@ -49,20 +52,24 @@ object PaymentStorage {
             }
         }
 
-        // Normalize amount representation (e.g. 1000 vs 1000.00)
-        val normalized = amount.toDoubleOrNull()?.let {
-            if (it % 1.0 == 0.0) it.toInt().toString() else String.format("%.2f", it)
-        } ?: amount.trim()
+        // Normalize amount representation (e.g. 180 vs 180.00)
+        val normalized = normalizeAmount(amount)
 
         val lastTime = recentProcessedAmounts[normalized]
         if (lastTime != null && (now - lastTime) < DEDUPLICATION_WINDOW_MS) {
-            // Already announced within the last 25 seconds via either SMS or notification!
+            Log.d(TAG, "Duplicate check TRUE for amount ₹$normalized (processed ${now - lastTime}ms ago)")
             return true
         }
 
-        // Record this payment timestamp so the second one is ignored
+        // Record this payment timestamp so the subsequent SMS or notification is ignored
         recentProcessedAmounts[normalized] = now
         return false
+    }
+
+    private fun normalizeAmount(amount: String): String {
+        return amount.replace(",", "").toDoubleOrNull()?.let {
+            if (it % 1.0 == 0.0) it.toInt().toString() else String.format("%.2f", it)
+        } ?: amount.trim()
     }
 
     private fun getPrefs(context: Context): SharedPreferences {
@@ -77,8 +84,20 @@ object PaymentStorage {
         payerName: String?,
         bank: String,
         rawText: String
-    ): StoredPayment {
+    ): StoredPayment? {
         val currentList = getPayments(context).toMutableList()
+        val now = System.currentTimeMillis()
+
+        // CRITICAL FIX FOR 2X DUPLICATES IN RECENT PAYMENTS:
+        // If a payment of the same amount exists within the last 35 seconds, reject it!
+        val existingDuplicate = currentList.firstOrNull { existing ->
+            Math.abs(existing.amount - amount) < 0.01 && (now - existing.timestamp) < DEDUPLICATION_WINDOW_MS
+        }
+
+        if (existingDuplicate != null) {
+            Log.w(TAG, "Prevented duplicate payment insertion for ₹$formattedAmount. Existing record ID: ${existingDuplicate.id}")
+            return null
+        }
 
         val newRecord = StoredPayment(
             id = System.currentTimeMillis().toString(),
@@ -86,7 +105,7 @@ object PaymentStorage {
             formattedAmount = formattedAmount,
             payerName = payerName ?: "",
             bank = bank,
-            timestamp = System.currentTimeMillis(),
+            timestamp = now,
             rawText = rawText
         )
 
@@ -125,7 +144,21 @@ object PaymentStorage {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        return list
+
+        // Automatic deduplication: If any existing duplicate payments (same amount within 35 seconds)
+        // are already stored in SharedPreferences, keep only the first one
+        val deduped = mutableListOf<StoredPayment>()
+        for (item in list) {
+            val isDupe = deduped.any { existing ->
+                Math.abs(existing.amount - item.amount) < 0.01 &&
+                        Math.abs(existing.timestamp - item.timestamp) < DEDUPLICATION_WINDOW_MS
+            }
+            if (!isDupe) {
+                deduped.add(item)
+            }
+        }
+
+        return deduped
     }
 
     @Synchronized
