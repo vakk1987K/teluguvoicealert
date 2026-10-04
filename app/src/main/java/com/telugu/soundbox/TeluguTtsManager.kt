@@ -107,38 +107,32 @@ object LanguageManager {
         TeluguTtsManager.setLanguage(context, language)
     }
 
+    /**
+     * Crisp, clear, amount-only announcement sentence.
+     * Does NOT read person names, phone numbers, or sender details.
+     */
     fun getAnnouncementSentence(
         language: SoundboxLanguage,
-        amount: String,
-        payerName: String?
+        amount: String
     ): String {
-        val hasPayer = !payerName.isNullOrBlank()
-        val cleanPayer = payerName?.trim() ?: ""
-
         return when (language) {
             SoundboxLanguage.TELUGU -> {
-                if (hasPayer) "$cleanPayer నుండి $amount రూపాయలు మీ ఖాతాలో జమ అయ్యాయి."
-                else "మీ ఖాతాలో $amount రూపాయలు జమ అయ్యాయి."
+                "$amount రూపాయలు మీ ఖాతాలో జమ అయ్యాయి."
             }
             SoundboxLanguage.HINDI -> {
-                if (hasPayer) "$cleanPayer से $amount रुपये आपके खाते में प्राप्त हुए हैं।"
-                else "आपके खाते में $amount रुपये प्राप्त हुए हैं।"
+                "$amount रुपये आपके खाते में प्राप्त हुए हैं।"
             }
             SoundboxLanguage.MARATHI -> {
-                if (hasPayer) "$cleanPayer कडून $amount रुपये आपल्या खात्यात जमा झाले आहेत."
-                else "आपल्या खात्यात $amount रुपये जमा झाले आहेत."
+                "$amount रुपये आपल्या खात्यात जमा झाले आहेत."
             }
             SoundboxLanguage.GUJARATI -> {
-                if (hasPayer) "$cleanPayer તરફથી $amount રૂપિયા તમારા ખાતામાં જમા થયા છે."
-                else "તમારા ખાતામાં $amount રૂપિયા જમા થયા છે."
+                "$amount રૂપિયા તમારા ખાતામાં જમા થયા છે."
             }
             SoundboxLanguage.TAMIL -> {
-                if (hasPayer) "$cleanPayer இடமிருந்து $amount ரூபாய் உங்கள் கணக்கில் வரவு வைக்கப்பட்டது."
-                else "உங்கள் கணக்கில் $amount ரூபாய் வரவு வைக்கப்பட்டது."
+                "$amount ரூபாய் உங்கள் கணக்கில் வரவு வைக்கப்பட்டது."
             }
             SoundboxLanguage.ENGLISH -> {
-                if (hasPayer) "Received $amount rupees from $cleanPayer."
-                else "Received $amount rupees in your account."
+                "$amount rupees credited to your account."
             }
         }
     }
@@ -241,10 +235,13 @@ object TeluguTtsManager {
         }
     }
 
+    /**
+     * Announce incoming payment with chime and amount-only voice.
+     */
     fun announcePayment(
         context: Context,
         amount: String,
-        payerName: String?,
+        payerName: String? = null,
         language: SoundboxLanguage = LanguageManager.getLanguage(context),
         onComplete: (() -> Unit)? = null
     ) {
@@ -253,7 +250,7 @@ object TeluguTtsManager {
         wakeUpDevice(appContext)
         ensureAudibleVolume(appContext)
 
-        val sentence = LanguageManager.getAnnouncementSentence(language, amount, payerName)
+        val sentence = LanguageManager.getAnnouncementSentence(language, amount)
 
         CoroutineScope(Dispatchers.IO).launch {
             playPaymentChime(appContext)
