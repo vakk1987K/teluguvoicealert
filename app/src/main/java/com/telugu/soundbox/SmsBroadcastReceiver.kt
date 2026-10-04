@@ -57,10 +57,16 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
 
             val payment = TransactionParser.parse(fullText)
             if (payment != null && payment.isCredit && payment.amount > 0) {
-                Log.i(TAG, "Credit payment detected! Amount: ₹${payment.formattedAmount}, Payer: ${payment.payerName}")
+                // Deduplication: if App Notification (PhonePe/GPay) already processed this within 35s, skip!
+                if (PaymentStorage.isDuplicate(payment.formattedAmount)) {
+                    Log.d(TAG, "Duplicate payment detected from SMS (₹${payment.formattedAmount}), skipping voice alert")
+                    if (wakeLock.isHeld) wakeLock.release()
+                    pendingResult.finish()
+                    return
+                }
 
-                // Save to lightweight temporary storage
-                PaymentStorage.addPayment(
+                // Save to lightweight temporary storage. If addPayment returns null, it was an existing duplicate -> skip!
+                val addedPayment = PaymentStorage.addPayment(
                     context = context,
                     amount = payment.amount,
                     formattedAmount = payment.formattedAmount,
@@ -68,6 +74,15 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
                     bank = payment.bank,
                     rawText = payment.rawText
                 )
+
+                if (addedPayment == null) {
+                    Log.d(TAG, "Payment of ₹${payment.formattedAmount} was already added via notification, skipping SMS voice alert")
+                    if (wakeLock.isHeld) wakeLock.release()
+                    pendingResult.finish()
+                    return
+                }
+
+                Log.i(TAG, "Credit payment detected! Amount: ₹${payment.formattedAmount}, Payer: ${payment.payerName}")
 
                 val uiIntent = Intent(ACTION_NEW_PAYMENT).apply {
                     putExtra(EXTRA_AMOUNT, payment.formattedAmount)
