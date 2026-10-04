@@ -33,17 +33,35 @@ object PaymentStorage {
     private const val KEY_PAYMENTS = "cached_payments_list"
     private const val MAX_RECORDS = 250
 
-    private var lastProcessedAmount: String = ""
-    private var lastProcessedTime: Long = 0L
+    // Deduplication window: 25 seconds prevents duplicate announcements between SMS & App notifications
+    private val recentProcessedAmounts = mutableMapOf<String, Long>()
+    private const val DEDUPLICATION_WINDOW_MS = 25000L
 
     @Synchronized
     fun isDuplicate(amount: String): Boolean {
         val now = System.currentTimeMillis()
-        if (lastProcessedAmount == amount && (now - lastProcessedTime) < 4000L) {
+
+        // Clean up entries older than 60 seconds
+        val iterator = recentProcessedAmounts.entries.iterator()
+        while (iterator.hasNext()) {
+            if (now - iterator.next().value > 60000L) {
+                iterator.remove()
+            }
+        }
+
+        // Normalize amount representation (e.g. 1000 vs 1000.00)
+        val normalized = amount.toDoubleOrNull()?.let {
+            if (it % 1.0 == 0.0) it.toInt().toString() else String.format("%.2f", it)
+        } ?: amount.trim()
+
+        val lastTime = recentProcessedAmounts[normalized]
+        if (lastTime != null && (now - lastTime) < DEDUPLICATION_WINDOW_MS) {
+            // Already announced within the last 25 seconds via either SMS or notification!
             return true
         }
-        lastProcessedAmount = amount
-        lastProcessedTime = now
+
+        // Record this payment timestamp so the second one is ignored
+        recentProcessedAmounts[normalized] = now
         return false
     }
 
@@ -168,8 +186,7 @@ object PaymentStorage {
     @Synchronized
     fun clearAll(context: Context) {
         getPrefs(context).edit().remove(KEY_PAYMENTS).apply()
-        lastProcessedAmount = ""
-        lastProcessedTime = 0L
+        recentProcessedAmounts.clear()
     }
 
     private fun saveList(context: Context, list: List<StoredPayment>) {
