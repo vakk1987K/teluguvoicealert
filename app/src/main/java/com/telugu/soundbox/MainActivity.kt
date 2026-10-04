@@ -1,326 +1,4 @@
-package com.telugu.soundbox
-
-import android.Manifest
-import android.content.BroadcastReceiver
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
-import android.os.Bundle
-import android.os.PowerManager
-import android.provider.Settings
-import android.service.notification.NotificationListenerService
-import android.util.Log
-import android.view.WindowManager
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
-
-enum class TimePeriod {
-    TODAY, SEVEN_DAYS, FIFTEEN_DAYS, THIRTY_DAYS
-}
-
-class MainActivity : ComponentActivity() {
-
-    private val paymentListState = mutableStateListOf<StoredPayment>()
-    private var summaryState = mutableStateOf(
-        PaymentSummary(
-            today = PeriodSummary(0.0, 0),
-            sevenDays = PeriodSummary(0.0, 0),
-            fifteenDays = PeriodSummary(0.0, 0),
-            thirtyDays = PeriodSummary(0.0, 0)
-        )
-    )
-    private var activeLanguageState = mutableStateOf(SoundboxLanguage.TELUGU)
-
-    private val paymentReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == SmsBroadcastReceiver.ACTION_NEW_PAYMENT) {
-                refreshData()
-            }
-        }
-    }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-            )
-        }
-
-        activeLanguageState.value = LanguageManager.getLanguage(this)
-        TeluguTtsManager.init(this)
-        SoundboxForegroundService.startService(this)
-
-        val filter = IntentFilter(SmsBroadcastReceiver.ACTION_NEW_PAYMENT)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(paymentReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(paymentReceiver, filter)
-        }
-
-        refreshData()
-
-        setContent {
-            SoundboxApp(
-                payments = paymentListState,
-                summary = summaryState.value,
-                currentLanguage = activeLanguageState.value,
-                onLanguageChanged = { lang ->
-                    activeLanguageState.value = lang
-                    LanguageManager.setLanguage(this, lang)
-                    TeluguTtsManager.previewLanguage(this, lang)
-                },
-                onTestSpeech = { amount ->
-                    val amtDouble = amount.toDoubleOrNull() ?: 0.0
-                    PaymentStorage.addPayment(
-                        context = this,
-                        amount = amtDouble,
-                        formattedAmount = amount,
-                        payerName = "",
-                        bank = "Test / UPI",
-                        rawText = "Payment received of Rs $amount"
-                    )
-                    refreshData()
-                    TeluguTtsManager.announcePayment(
-                        context = this,
-                        amount = amount,
-                        language = activeLanguageState.value
-                    )
-                },
-                onSimulateNotification = { sampleText, provider ->
-                    val payment = TransactionParser.parse(sampleText, provider)
-                    if (payment != null) {
-                        PaymentStorage.addPayment(
-                            context = this,
-                            amount = payment.amount,
-                            formattedAmount = payment.formattedAmount,
-                            payerName = "",
-                            bank = payment.bank,
-                            rawText = sampleText
-                        )
-                        refreshData()
-                        TeluguTtsManager.announcePayment(
-                            context = this,
-                            amount = payment.formattedAmount,
-                            language = activeLanguageState.value
-                        )
-                    }
-                },
-                onClearAll = {
-                    PaymentStorage.clearAll(this)
-                    refreshData()
-                },
-                onRequestBatteryOptimization = {
-                    requestBatteryOptimizationExemption()
-                },
-                onRequestNotificationAccess = {
-                    openNotificationListenerSettings()
-                }
-            )
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        SoundboxForegroundService.startService(this)
-
-        activeLanguageState.value = LanguageManager.getLanguage(this)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isNotificationServiceEnabled(this)) {
-            try {
-                val componentName = ComponentName(this, PaymentNotificationListenerService::class.java)
-                NotificationListenerService.requestRebind(componentName)
-                Log.i("MainActivity", "Requested rebind for PaymentNotificationListenerService")
-            } catch (e: Exception) {
-                Log.w("MainActivity", "requestRebind exception: ${e.message}")
-            }
-        }
-
-        refreshData()
-    }
-
-    private fun refreshData() {
-        paymentListState.clear()
-        paymentListState.addAll(PaymentStorage.getPayments(this))
-        summaryState.value = PaymentStorage.getSummary(this)
-    }
-
-    private fun openNotificationListenerSettings() {
-        try {
-            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-            startActivity(intent)
-        } catch (_: Exception) {}
-    }
-
-    private fun requestBatteryOptimizationExemption() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            try {
-                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-                if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                    startActivity(intent)
-                }
-            } catch (e: Exception) {
-                try {
-                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                    startActivity(intent)
-                } catch (_: Exception) {}
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        try {
-            unregisterReceiver(paymentReceiver)
-        } catch (_: Exception) {}
-    }
-}
-
-fun isNotificationServiceEnabled(context: Context): Boolean {
-    val pkgName = context.packageName
-    val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
-    return flat != null && flat.contains(pkgName)
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SoundboxApp(
-    payments: List<StoredPayment>,
-    summary: PaymentSummary,
-    currentLanguage: SoundboxLanguage,
-    onLanguageChanged: (SoundboxLanguage) -> Unit,
-    onTestSpeech: (amount: String) -> Unit,
-    onSimulateNotification: (text: String, provider: String) -> Unit,
-    onClearAll: () -> Unit,
-    onRequestBatteryOptimization: () -> Unit,
-    onRequestNotificationAccess: () -> Unit
-) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var hasSmsPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
-        )
-    }
-
-    var isNotificationAccessGranted by remember {
-        mutableStateOf(isNotificationServiceEnabled(context))
-    }
-
-    var selectedPeriod by remember { mutableStateOf(TimePeriod.TODAY) }
-    var showClearConfirmDialog by remember { mutableStateOf(false) }
-    var showPrivacyPolicyDialog by remember { mutableStateOf(false) }
-
-    val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as? PowerManager }
-    var isBatteryOptIgnored by remember {
-        mutableStateOf(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && powerManager != null) {
-                powerManager.isIgnoringBatteryOptimizations(context.packageName)
-            } else true
-        )
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { perms ->
-        hasSmsPermission = perms[Manifest.permission.RECEIVE_SMS] == true
-        if (hasSmsPermission) {
-            SoundboxForegroundService.startService(context)
-        }
-    }
-
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1.0f,
-        targetValue = 1.06f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = EaseInOutQuad),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseScale"
-    )
-
-    if (showClearConfirmDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearConfirmDialog = false },
-            title = { Text("Erase Temporary Records?", color = Color.White, fontWeight = FontWeight.Bold) },
-            text = {
-                Text(
-                    "This will clear the Today, 7-Day, 15-Day, and 30-Day total collection counters and recent payments list.",
-                    color = Color(0xFFCBD5E1),
-                    fontSize = 13.sp
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onClearAll()
-                        showClearConfirmDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
-                ) {
-                    Text("Yes, Clear All", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearConfirmDialog = false }) {
-                    Text("Cancel", color = Color(0xFF94A3B8))
-                }
-            },
-            containerColor = Color(0xFF1E293B)
-        )
-    }
-
+// Privacy Policy Dialog (For 100% Google Play Store Compliance)
     if (showPrivacyPolicyDialog) {
         AlertDialog(
             onDismissRequest = { showPrivacyPolicyDialog = false },
@@ -329,18 +7,23 @@ fun SoundboxApp(
                     Icon(
                         imageVector = Icons.Default.Security,
                         contentDescription = "Privacy Policy",
-                        tint = Color(0xFF38BDF8),
-                        modifier = Modifier.size(20.dp)
+                        tint = Color(0xFF34D399),
+                        modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Privacy Policy", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        "Privacy Policy",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp
+                    )
                 }
             },
             text = {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 350.dp)
+                        .heightIn(max = 380.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
                     Text(
@@ -351,12 +34,13 @@ fun SoundboxApp(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "UPI Sound Box does NOT collect, upload, share, or sell any personal or financial data. All SMS and notification parsing happens strictly on your mobile device.",
+                        text = "UPI Sound Box: Payment Alert does NOT collect, upload, share, or sell any personal or financial data. All SMS and notification parsing happens strictly on your physical device.",
                         color = Color(0xFFE2E8F0),
                         fontSize = 12.sp,
                         lineHeight = 16.sp
                     )
                     Spacer(modifier = Modifier.height(10.dp))
+
                     Text(
                         text = "No Cloud Storage & Zero Server Transmission",
                         color = Color(0xFF34D399),
@@ -365,651 +49,73 @@ fun SoundboxApp(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Your bank transactions, customer phone numbers, and payment details are never transmitted to external cloud servers. Records are stored locally on your device in temporary memory.",
+                        text = "Your bank transactions, customer phone numbers, and payment details are never transmitted to external servers. Payment totals are stored locally in device private memory and can be cleared at any time.",
                         color = Color(0xFFE2E8F0),
                         fontSize = 12.sp,
                         lineHeight = 16.sp
                     )
                     Spacer(modifier = Modifier.height(10.dp))
+
                     Text(
-                        text = "Google Play Policy Compliance",
-                        color = Color(0xFF34D399),
+                        text = "Permissions Used & Purpose",
+                        color = Color(0xFF38BDF8),
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "This application strictly adheres to the Google Play SMS and Notification Listener policies and the Indian Digital Personal Data Protection (DPDP) Act 2023.",
+                        text = "• Notification Access: Detects UPI payment amounts from PhonePe, GPay, Paytm, etc., to speak voice alerts.\n• SMS Permissions: Reads incoming bank credit alerts to announce received payments.\n• Foreground Service: Keeps voice active when your phone screen is locked.",
                         color = Color(0xFF94A3B8),
                         fontSize = 11.sp,
                         lineHeight = 15.sp
                     )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "Developer Contact",
+                        color = Color(0xFF38BDF8),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Email: kvakk1986@gmail.com\nCompliant with Indian DPDP Act 2023 & Google Play Policies.",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 11.sp
+                    )
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = { showPrivacyPolicyDialog = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Close", color = Color.White)
+                    Button(
+                        onClick = {
+                            try {
+                                val browserIntent = Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://sites.google.com/view/privacypolicy-upisoundbox/home")
+                                )
+                                context.startActivity(browserIntent)
+                            } catch (_: Exception) {}
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("🌐 View Web Policy", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { showPrivacyPolicyDialog = false },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Close", color = Color.White, fontSize = 12.sp)
+                    }
                 }
             },
             containerColor = Color(0xFF1E293B)
         )
     }
-
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = Color(0xFF0F172A)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "UPI Sound Box",
-                            color = Color.White,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = "Privacy Policy",
-                            tint = Color(0xFF38BDF8),
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clickable { showPrivacyPolicyDialog = true }
-                        )
-                    }
-                    Text(
-                        text = "Payment Alert • ${currentLanguage.bannerSubtitle}",
-                        color = Color(0xFF10B981),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (hasSmsPermission) Color(0xFF064E3B) else Color(0xFF7C2D12),
-                        modifier = Modifier.clickable {
-                            val permsToRequest = mutableListOf(
-                                Manifest.permission.RECEIVE_SMS,
-                                Manifest.permission.READ_SMS
-                            )
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                permsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
-                            }
-                            permissionLauncher.launch(permsToRequest.toTypedArray())
-                        }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (hasSmsPermission) Icons.Default.CheckCircle else Icons.Default.Warning,
-                                contentDescription = null,
-                                tint = if (hasSmsPermission) Color(0xFF34D399) else Color(0xFFF87171),
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = if (hasSmsPermission) "SMS" else "Grant SMS",
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (isNotificationAccessGranted) Color(0xFF075985) else Color(0xFF78350F),
-                        modifier = Modifier.clickable {
-                            onRequestNotificationAccess()
-                        }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Notifications,
-                                contentDescription = null,
-                                tint = if (isNotificationAccessGranted) Color(0xFF38BDF8) else Color(0xFFFBBF24),
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = if (isNotificationAccessGranted) "Apps Active" else "Enable Apps",
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
-
-            // --- MULTI-LANGUAGE SELECTION BAR ---
-            Surface(
-                color = Color(0xFF1E293B),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Language,
-                        contentDescription = "Voice Language",
-                        tint = Color(0xFF38BDF8),
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        SoundboxLanguage.values().forEach { lang ->
-                            val isSelected = lang == currentLanguage
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSelected) Color(0xFF10B981) else Color(0xFF0F172A),
-                                modifier = Modifier.clickable {
-                                    onLanguageChanged(lang)
-                                }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = lang.nativeName,
-                                        color = if (isSelected) Color.White else Color(0xFFCBD5E1),
-                                        fontSize = 11.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                    )
-                                    if (isSelected) {
-                                        Spacer(modifier = Modifier.width(3.dp))
-                                        Icon(
-                                            imageVector = Icons.Default.VolumeUp,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(11.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (!isNotificationAccessGranted) {
-                Surface(
-                    color = Color(0xFF0369A1),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 6.dp)
-                        .clickable { onRequestNotificationAccess() }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Notifications,
-                            contentDescription = "Notification Access",
-                            tint = Color(0xFFBAE6FD),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Tap to enable App Reader (Speaks PhonePe / GPay even without Bank SIM)",
-                            color = Color(0xFFF0F9FF),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-            }
-
-            if (!isBatteryOptIgnored) {
-                Surface(
-                    color = Color(0xFF78350F),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 6.dp)
-                        .clickable { onRequestBatteryOptimization() }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.BatteryChargingFull,
-                            contentDescription = "Battery Warning",
-                            tint = Color(0xFFFBBF24),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Tap for Unrestricted Battery (Keeps soundbox active on lock screen)",
-                            color = Color(0xFFFEF3C7),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-            }
-
-            // --- MERCHANT SUMMARY CARD (Today / 7 Days / 15 Days / 30 Days) ---
-            Surface(
-                color = Color(0xFF1E293B),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            PeriodTab(
-                                label = currentLanguage.todayLabel,
-                                isSelected = selectedPeriod == TimePeriod.TODAY,
-                                onClick = { selectedPeriod = TimePeriod.TODAY }
-                            )
-                            PeriodTab(
-                                label = "7 Days",
-                                isSelected = selectedPeriod == TimePeriod.SEVEN_DAYS,
-                                onClick = { selectedPeriod = TimePeriod.SEVEN_DAYS }
-                            )
-                            PeriodTab(
-                                label = "15 Days",
-                                isSelected = selectedPeriod == TimePeriod.FIFTEEN_DAYS,
-                                onClick = { selectedPeriod = TimePeriod.FIFTEEN_DAYS }
-                            )
-                            PeriodTab(
-                                label = "30 Days",
-                                isSelected = selectedPeriod == TimePeriod.THIRTY_DAYS,
-                                onClick = { selectedPeriod = TimePeriod.THIRTY_DAYS }
-                            )
-                        }
-
-                        IconButton(
-                            onClick = { showClearConfirmDialog = true },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Clear Records",
-                                tint = Color(0xFF94A3B8),
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    val currentSummary = when (selectedPeriod) {
-                        TimePeriod.TODAY -> summary.today
-                        TimePeriod.SEVEN_DAYS -> summary.sevenDays
-                        TimePeriod.FIFTEEN_DAYS -> summary.fifteenDays
-                        TimePeriod.THIRTY_DAYS -> summary.thirtyDays
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        Column {
-                            Text(
-                                text = "TOTAL RECEIVED",
-                                color = Color(0xFF94A3B8),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
-                            )
-                            Text(
-                                text = if (currentSummary.totalAmount % 1.0 == 0.0) {
-                                    "₹ ${currentSummary.totalAmount.toInt()}"
-                                } else {
-                                    "₹ ${String.format("%.2f", currentSummary.totalAmount)}"
-                                },
-                                color = Color(0xFF34D399),
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF0F172A)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "${currentSummary.totalOrders} Orders",
-                                    color = Color(0xFF38BDF8),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Interactive Speaker Disc & Lock Screen Notice
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(76.dp)
-                        .scale(if (hasSmsPermission || isNotificationAccessGranted) pulseScale else 1.0f)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(Color(0xFF10B981), Color(0xFF065F46), Color(0xFF022C22))
-                            )
-                        )
-                        .border(2.dp, Color(0xFF34D399), CircleShape)
-                        .clickable {
-                            onTestSpeech("210")
-                        }
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.VolumeUp,
-                            contentDescription = "Speaker",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
-                        Text(
-                            text = "TEST",
-                            color = Color(0xFFA7F3D0),
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(10.dp))
-
-                Surface(
-                    color = Color(0xFF1E293B),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "Lock Screen Audio",
-                            tint = Color(0xFF38BDF8),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Amount-Only Voice Alert: Announces in ${currentLanguage.displayName} on lock screen",
-                            color = Color(0xFFE2E8F0),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium,
-                            lineHeight = 13.sp
-                        )
-                    }
-                }
-            }
-
-            // Quick Test Buttons (Amount Only: 10, 50, 100, 500, 1000, 2000, 5000)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 6.dp, bottom = 6.dp)
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Button(
-                    onClick = { onTestSpeech("10") },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text("+ ₹10", fontSize = 10.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
-                }
-
-                Button(
-                    onClick = { onTestSpeech("50") },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text("+ ₹50", fontSize = 10.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
-                }
-
-                Button(
-                    onClick = { onTestSpeech("100") },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text("+ ₹100", fontSize = 10.sp, color = Color(0xFFFDE047), fontWeight = FontWeight.Bold)
-                }
-
-                Button(
-                    onClick = { onTestSpeech("500") },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text("+ ₹500", fontSize = 10.sp, color = Color(0xFFF472B6), fontWeight = FontWeight.Bold)
-                }
-
-                Button(
-                    onClick = { onTestSpeech("1000") },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text("+ ₹1,000", fontSize = 10.sp, color = Color(0xFF818CF8), fontWeight = FontWeight.Bold)
-                }
-
-                Button(
-                    onClick = { onTestSpeech("2000") },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text("+ ₹2,000", fontSize = 10.sp, color = Color(0xFFA78BFA), fontWeight = FontWeight.Bold)
-                }
-
-                Button(
-                    onClick = { onTestSpeech("5000") },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text("+ ₹5,000", fontSize = 10.sp, color = Color(0xFFFBBF24), fontWeight = FontWeight.Bold)
-                }
-            }
-
-            // Recent Payments List
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "RECENT PAYMENTS (${payments.size})",
-                    color = Color(0xFF94A3B8),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { showPrivacyPolicyDialog = true }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Security,
-                        contentDescription = "Privacy Policy",
-                        tint = Color(0xFF38BDF8),
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Spacer(modifier = Modifier.width(3.dp))
-                    Text(
-                        text = "Privacy Policy",
-                        color = Color(0xFF38BDF8),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-
-            if (payments.isEmpty()) {
-                Surface(
-                    color = Color(0xFF1E293B),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth().weight(1f)
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxSize().padding(14.dp),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "Ready to announce payments!",
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Announces credited amount in ${currentLanguage.displayName} (Amount only). Tallies Today, 7-Day, 15-Day, and 30-Day collection totals!",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 11.sp,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                    }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(payments) { item ->
-                        val timeStr = java.text.SimpleDateFormat(
-                            "dd MMM, hh:mm a",
-                            java.util.Locale.getDefault()
-                        ).format(java.util.Date(item.timestamp))
-
-                        Surface(
-                            color = Color(0xFF1E293B),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = "₹${item.formattedAmount}",
-                                            color = Color(0xFF34D399),
-                                            fontSize = 15.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "Credited",
-                                            color = Color(0xFF94A3B8),
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    }
-                                    Text(
-                                        text = "${item.bank} • $timeStr",
-                                        color = Color(0xFF64748B),
-                                        fontSize = 10.sp
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = { onTestSpeech(item.formattedAmount) },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Replay Voice",
-                                        tint = Color(0xFF34D399),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun PeriodTab(
-    label: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = if (isSelected) Color(0xFF10B981) else Color(0xFF0F172A),
-        modifier = Modifier.clickable { onClick() }
-    ) {
-        Text(
-            text = label,
-            color = if (isSelected) Color.White else Color(0xFF94A3B8),
-            fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-        )
-    }
-}
