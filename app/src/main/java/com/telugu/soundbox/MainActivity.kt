@@ -23,15 +23,18 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
@@ -64,6 +67,7 @@ class MainActivity : ComponentActivity() {
             thirtyDays = PeriodSummary(0.0, 0)
         )
     )
+    private var activeLanguageState = mutableStateOf(SoundboxLanguage.TELUGU)
 
     private val paymentReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -88,6 +92,7 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        activeLanguageState.value = LanguageManager.getLanguage(this)
         TeluguTtsManager.init(this)
         SoundboxForegroundService.startService(this)
 
@@ -104,6 +109,12 @@ class MainActivity : ComponentActivity() {
             SoundboxApp(
                 payments = paymentListState,
                 summary = summaryState.value,
+                currentLanguage = activeLanguageState.value,
+                onLanguageChanged = { lang ->
+                    activeLanguageState.value = lang
+                    LanguageManager.setLanguage(this, lang)
+                    TeluguTtsManager.previewLanguage(this, lang)
+                },
                 onTestSpeech = { amount, payer ->
                     val amtDouble = amount.toDoubleOrNull() ?: 0.0
                     PaymentStorage.addPayment(
@@ -115,7 +126,12 @@ class MainActivity : ComponentActivity() {
                         rawText = "Payment received of Rs $amount from $payer"
                     )
                     refreshData()
-                    TeluguTtsManager.announcePayment(this, amount, payer)
+                    TeluguTtsManager.announcePayment(
+                        context = this,
+                        amount = amount,
+                        payerName = payer,
+                        language = activeLanguageState.value
+                    )
                 },
                 onSimulateNotification = { sampleText, provider ->
                     val payment = TransactionParser.parse(sampleText, provider)
@@ -129,7 +145,12 @@ class MainActivity : ComponentActivity() {
                             rawText = sampleText
                         )
                         refreshData()
-                        TeluguTtsManager.announcePayment(this, payment.formattedAmount, payment.payerName)
+                        TeluguTtsManager.announcePayment(
+                            context = this,
+                            amount = payment.formattedAmount,
+                            payerName = payment.payerName,
+                            language = activeLanguageState.value
+                        )
                     }
                 },
                 onClearAll = {
@@ -150,7 +171,8 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         SoundboxForegroundService.startService(this)
 
-        // Force Android OS to bind to the NotificationListenerService if enabled
+        activeLanguageState.value = LanguageManager.getLanguage(this)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isNotificationServiceEnabled(this)) {
             try {
                 val componentName = ComponentName(this, PaymentNotificationListenerService::class.java)
@@ -215,6 +237,8 @@ fun isNotificationServiceEnabled(context: Context): Boolean {
 fun SoundboxApp(
     payments: List<StoredPayment>,
     summary: PaymentSummary,
+    currentLanguage: SoundboxLanguage,
+    onLanguageChanged: (SoundboxLanguage) -> Unit,
     onTestSpeech: (amount: String, payer: String) -> Unit,
     onSimulateNotification: (text: String, provider: String) -> Unit,
     onClearAll: () -> Unit,
@@ -307,21 +331,22 @@ fun SoundboxApp(
         ) {
             // Header
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column {
                     Text(
-                        text = "Telugu Payment Soundbox",
+                        text = "Vyapar Soundbox",
                         color = Color.White,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "తెలుగు చెల్లింపు సౌండ్‌బాక్స్",
+                        text = currentLanguage.bannerSubtitle,
                         color = Color(0xFF10B981),
-                        fontSize = 12.sp
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
                     )
                 }
 
@@ -384,6 +409,67 @@ fun SoundboxApp(
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold
                             )
+                        }
+                    }
+                }
+            }
+
+            // --- MULTI-LANGUAGE SELECTION BAR ---
+            Surface(
+                color = Color(0xFF1E293B),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Language,
+                        contentDescription = "Voice Language",
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        SoundboxLanguage.values().forEach { lang ->
+                            val isSelected = lang == currentLanguage
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSelected) Color(0xFF10B981) else Color(0xFF0F172A),
+                                modifier = Modifier.clickable {
+                                    onLanguageChanged(lang)
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = lang.nativeName,
+                                        color = if (isSelected) Color.White else Color(0xFFCBD5E1),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                    if (isSelected) {
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.VolumeUp,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -453,7 +539,7 @@ fun SoundboxApp(
             Surface(
                 color = Color(0xFF1E293B),
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Row(
@@ -463,7 +549,7 @@ fun SoundboxApp(
                     ) {
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             PeriodTab(
-                                label = "Today (ఈరోజు)",
+                                label = currentLanguage.todayLabel,
                                 isSelected = selectedPeriod == TimePeriod.TODAY,
                                 onClick = { selectedPeriod = TimePeriod.TODAY }
                             )
@@ -547,14 +633,14 @@ fun SoundboxApp(
 
             // Interactive Speaker Disc & Lock Screen Notice
             Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(80.dp)
+                        .size(76.dp)
                         .scale(if (hasSmsPermission || isNotificationAccessGranted) pulseScale else 1.0f)
                         .clip(CircleShape)
                         .background(
@@ -564,7 +650,15 @@ fun SoundboxApp(
                         )
                         .border(2.dp, Color(0xFF34D399), CircleShape)
                         .clickable {
-                            onTestSpeech("210", "రమేష్")
+                            val sampleName = when (currentLanguage) {
+                                SoundboxLanguage.TELUGU -> "రమేష్"
+                                SoundboxLanguage.HINDI -> "रमेश"
+                                SoundboxLanguage.MARATHI -> "रमेश"
+                                SoundboxLanguage.GUJARATI -> "રમેશ"
+                                SoundboxLanguage.TAMIL -> "ரமேஷ்"
+                                SoundboxLanguage.ENGLISH -> "Ramesh"
+                            }
+                            onTestSpeech("210", sampleName)
                         }
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -572,7 +666,7 @@ fun SoundboxApp(
                             imageVector = Icons.Default.VolumeUp,
                             contentDescription = "Speaker",
                             tint = Color.White,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(26.dp)
                         )
                         Text(
                             text = "TEST",
@@ -591,7 +685,7 @@ fun SoundboxApp(
                     modifier = Modifier.weight(1f)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -602,7 +696,7 @@ fun SoundboxApp(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Dual Soundbox: Listens to Bank SMS + GPay / PhonePe / Paytm notifications",
+                            text = "Multi-Language Soundbox: Announces in ${currentLanguage.displayName} on lock screen",
                             color = Color(0xFFE2E8F0),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium,
@@ -614,7 +708,7 @@ fun SoundboxApp(
 
             // Quick Simulation Buttons (Test GPay, PhonePe, and Custom values)
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Button(
@@ -662,9 +756,10 @@ fun SoundboxApp(
                 )
                 if (payments.isNotEmpty()) {
                     Text(
-                        text = "Auto-Synced",
+                        text = "Voice: ${currentLanguage.nativeName}",
                         color = Color(0xFF10B981),
-                        fontSize = 10.sp
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -688,7 +783,7 @@ fun SoundboxApp(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Listens to incoming Bank SMS AND PhonePe / Google Pay / Paytm notifications, announces in Telugu, and tallies Today's total!",
+                            text = "Listens to incoming Bank SMS AND PhonePe / Google Pay / Paytm notifications, announces in ${currentLanguage.displayName}, and tallies Today's total!",
                             color = Color(0xFF94A3B8),
                             fontSize = 11.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
