@@ -693,7 +693,7 @@ fun SoundboxApp(
                         )
                         .border(2.dp, Color(0xFF34D399), CircleShape)
                         .clickable {
-                            onTestSpeech("210")
+                            onTestSpeech("7500")
                         }
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -741,7 +741,7 @@ fun SoundboxApp(
                 }
             }
 
-            // Quick Test Buttons (Amount Only: 10, 50, 100, 500, 1000, 2000, 5000)
+            // Quick Test Buttons (Amount Only: 10, 50, 100, 500, 1000, 2000, 5000, 7500)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -810,6 +810,15 @@ fun SoundboxApp(
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text("+ ₹5,000", fontSize = 10.sp, color = Color(0xFFFBBF24), fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = { onTestSpeech("7500") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("+ ₹7,500", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -981,39 +990,39 @@ fun SoundboxApp(
                         }
                     }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showPrivacyPolicyDialog = true }
-                        .padding(vertical = 3.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Security,
-                        contentDescription = null,
-                        tint = Color(0xFF34D399),
-                        modifier = Modifier.size(13.dp)
-                    )
-                    Spacer(modifier = Modifier.width(5.dp))
-                    Text(
-                        text = "100% On-Device Privacy • Tap to View Policy",
-                        color = Color(0xFF38BDF8),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                // AdMob Banner Ad (Test Ad #1) from AdMobManager
-                Spacer(modifier = Modifier.height(4.dp))
-                AdMobBanner(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showPrivacyPolicyDialog = true }
+                    .padding(vertical = 3.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = null,
+                    tint = Color(0xFF34D399),
+                    modifier = Modifier.size(13.dp)
+                )
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    text = "100% On-Device Privacy • Tap to View Policy",
+                    color = Color(0xFF38BDF8),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium
                 )
             }
+
+            // AdMob Banner Ad (Test Ad #1): Permanently pinned at bottom
+            Spacer(modifier = Modifier.height(4.dp))
+            AdMobBanner(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+            )
         }
     }
 }
