@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.CheckCircle
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -54,7 +56,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
 enum class TimePeriod {
-    TODAY, SEVEN_DAYS, THIRTY_DAYS
+    TODAY, SEVEN_DAYS, FIFTEEN_DAYS, THIRTY_DAYS
 }
 
 class MainActivity : ComponentActivity() {
@@ -64,6 +66,7 @@ class MainActivity : ComponentActivity() {
         PaymentSummary(
             today = PeriodSummary(0.0, 0),
             sevenDays = PeriodSummary(0.0, 0),
+            fifteenDays = PeriodSummary(0.0, 0),
             thirtyDays = PeriodSummary(0.0, 0)
         )
     )
@@ -115,21 +118,20 @@ class MainActivity : ComponentActivity() {
                     LanguageManager.setLanguage(this, lang)
                     TeluguTtsManager.previewLanguage(this, lang)
                 },
-                onTestSpeech = { amount, payer ->
+                onTestSpeech = { amount ->
                     val amtDouble = amount.toDoubleOrNull() ?: 0.0
                     PaymentStorage.addPayment(
                         context = this,
                         amount = amtDouble,
                         formattedAmount = amount,
-                        payerName = payer,
+                        payerName = "",
                         bank = "Test / UPI",
-                        rawText = "Payment received of Rs $amount from $payer"
+                        rawText = "Payment received of Rs $amount"
                     )
                     refreshData()
                     TeluguTtsManager.announcePayment(
                         context = this,
                         amount = amount,
-                        payerName = payer,
                         language = activeLanguageState.value
                     )
                 },
@@ -140,7 +142,7 @@ class MainActivity : ComponentActivity() {
                             context = this,
                             amount = payment.amount,
                             formattedAmount = payment.formattedAmount,
-                            payerName = payment.payerName,
+                            payerName = "",
                             bank = payment.bank,
                             rawText = sampleText
                         )
@@ -148,7 +150,6 @@ class MainActivity : ComponentActivity() {
                         TeluguTtsManager.announcePayment(
                             context = this,
                             amount = payment.formattedAmount,
-                            payerName = payment.payerName,
                             language = activeLanguageState.value
                         )
                     }
@@ -239,7 +240,7 @@ fun SoundboxApp(
     summary: PaymentSummary,
     currentLanguage: SoundboxLanguage,
     onLanguageChanged: (SoundboxLanguage) -> Unit,
-    onTestSpeech: (amount: String, payer: String) -> Unit,
+    onTestSpeech: (amount: String) -> Unit,
     onSimulateNotification: (text: String, provider: String) -> Unit,
     onClearAll: () -> Unit,
     onRequestBatteryOptimization: () -> Unit,
@@ -258,6 +259,7 @@ fun SoundboxApp(
 
     var selectedPeriod by remember { mutableStateOf(TimePeriod.TODAY) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
+    var showPrivacyPolicyDialog by remember { mutableStateOf(false) }
 
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as? PowerManager }
     var isBatteryOptIgnored by remember {
@@ -294,7 +296,7 @@ fun SoundboxApp(
             title = { Text("Erase Temporary Records?", color = Color.White, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "This will clear the Today, 7-Day, and 30-Day total collection counters and recent payments list.",
+                    "This will clear the Today, 7-Day, 15-Day, and 30-Day total collection counters and recent payments list.",
                     color = Color(0xFFCBD5E1),
                     fontSize = 13.sp
                 )
@@ -319,6 +321,83 @@ fun SoundboxApp(
         )
     }
 
+    if (showPrivacyPolicyDialog) {
+        AlertDialog(
+            onDismissRequest = { showPrivacyPolicyDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Security,
+                        contentDescription = "Privacy Policy",
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Privacy Policy", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 350.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = "100% On-Device Local Processing",
+                        color = Color(0xFF34D399),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "UPI Sound Box does NOT collect, upload, share, or sell any personal or financial data. All SMS and notification parsing happens strictly on your mobile device.",
+                        color = Color(0xFFE2E8F0),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "No Cloud Storage & Zero Server Transmission",
+                        color = Color(0xFF34D399),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Your bank transactions, customer phone numbers, and payment details are never transmitted to external cloud servers. Records are stored locally on your device in temporary memory.",
+                        color = Color(0xFFE2E8F0),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Google Play Policy Compliance",
+                        color = Color(0xFF34D399),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "This application strictly adheres to the Google Play SMS and Notification Listener policies and the Indian Digital Personal Data Protection (DPDP) Act 2023.",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showPrivacyPolicyDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                ) {
+                    Text("Close", color = Color.White)
+                }
+            },
+            containerColor = Color(0xFF1E293B)
+        )
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = Color(0xFF0F172A)
@@ -336,14 +415,25 @@ fun SoundboxApp(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "UPI Sound Box",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = "Privacy Policy",
+                            tint = Color(0xFF38BDF8),
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clickable { showPrivacyPolicyDialog = true }
+                        )
+                    }
                     Text(
-                        text = "Vyapar Soundbox",
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = currentLanguage.bannerSubtitle,
+                        text = "Payment Alert • ${currentLanguage.bannerSubtitle}",
                         color = Color(0xFF10B981),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
@@ -535,7 +625,7 @@ fun SoundboxApp(
                 }
             }
 
-            // --- MERCHANT SUMMARY CARD (Today / 7 Days / 30 Days) ---
+            // --- MERCHANT SUMMARY CARD (Today / 7 Days / 15 Days / 30 Days) ---
             Surface(
                 color = Color(0xFF1E293B),
                 shape = RoundedCornerShape(16.dp),
@@ -547,7 +637,12 @@ fun SoundboxApp(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
                             PeriodTab(
                                 label = currentLanguage.todayLabel,
                                 isSelected = selectedPeriod == TimePeriod.TODAY,
@@ -557,6 +652,11 @@ fun SoundboxApp(
                                 label = "7 Days",
                                 isSelected = selectedPeriod == TimePeriod.SEVEN_DAYS,
                                 onClick = { selectedPeriod = TimePeriod.SEVEN_DAYS }
+                            )
+                            PeriodTab(
+                                label = "15 Days",
+                                isSelected = selectedPeriod == TimePeriod.FIFTEEN_DAYS,
+                                onClick = { selectedPeriod = TimePeriod.FIFTEEN_DAYS }
                             )
                             PeriodTab(
                                 label = "30 Days",
@@ -583,6 +683,7 @@ fun SoundboxApp(
                     val currentSummary = when (selectedPeriod) {
                         TimePeriod.TODAY -> summary.today
                         TimePeriod.SEVEN_DAYS -> summary.sevenDays
+                        TimePeriod.FIFTEEN_DAYS -> summary.fifteenDays
                         TimePeriod.THIRTY_DAYS -> summary.thirtyDays
                     }
 
@@ -650,15 +751,7 @@ fun SoundboxApp(
                         )
                         .border(2.dp, Color(0xFF34D399), CircleShape)
                         .clickable {
-                            val sampleName = when (currentLanguage) {
-                                SoundboxLanguage.TELUGU -> "రమేష్"
-                                SoundboxLanguage.HINDI -> "रमेश"
-                                SoundboxLanguage.MARATHI -> "रमेश"
-                                SoundboxLanguage.GUJARATI -> "રમેશ"
-                                SoundboxLanguage.TAMIL -> "ரமேஷ்"
-                                SoundboxLanguage.ENGLISH -> "Ramesh"
-                            }
-                            onTestSpeech("210", sampleName)
+                            onTestSpeech("210")
                         }
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -696,7 +789,7 @@ fun SoundboxApp(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Multi-Language Soundbox: Announces in ${currentLanguage.displayName} on lock screen",
+                            text = "Amount-Only Voice Alert: Announces in ${currentLanguage.displayName} on lock screen",
                             color = Color(0xFFE2E8F0),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium,
@@ -706,39 +799,49 @@ fun SoundboxApp(
                 }
             }
 
-            // Quick Simulation Buttons (Test GPay, PhonePe, and Custom values)
+            // Quick Test Buttons (Amount Only: 10, 50, 100, 500)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Button(
-                    onClick = { onSimulateNotification("Ramesh Kumar paid you ₹210 on Google Pay", "Google Pay") },
+                    onClick = { onTestSpeech("10") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("GPay ₹210", fontSize = 10.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
+                    Text("+ ₹10", fontSize = 10.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
                 }
 
                 Button(
-                    onClick = { onSimulateNotification("Payment of ₹500 received from Suresh", "PhonePe") },
+                    onClick = { onTestSpeech("50") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("PhonePe ₹500", fontSize = 10.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
+                    Text("+ ₹50", fontSize = 10.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
                 }
 
                 Button(
-                    onClick = { onSimulateNotification("Money received: ₹100 from Priya", "Paytm") },
+                    onClick = { onTestSpeech("100") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Paytm ₹100", fontSize = 10.sp, color = Color(0xFFFDE047), fontWeight = FontWeight.Bold)
+                    Text("+ ₹100", fontSize = 10.sp, color = Color(0xFFFDE047), fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = { onTestSpeech("500") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("+ ₹500", fontSize = 10.sp, color = Color(0xFFF472B6), fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -754,12 +857,22 @@ fun SoundboxApp(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
-                if (payments.isNotEmpty()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable { showPrivacyPolicyDialog = true }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Security,
+                        contentDescription = "Privacy Policy",
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
                     Text(
-                        text = "Voice: ${currentLanguage.nativeName}",
-                        color = Color(0xFF10B981),
+                        text = "Privacy Policy",
+                        color = Color(0xFF38BDF8),
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
@@ -783,7 +896,7 @@ fun SoundboxApp(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Listens to incoming Bank SMS AND PhonePe / Google Pay / Paytm notifications, announces in ${currentLanguage.displayName}, and tallies Today's total!",
+                            text = "Announces credited amount in ${currentLanguage.displayName} (Amount only). Tallies Today, 7-Day, 15-Day, and 30-Day collection totals!",
                             color = Color(0xFF94A3B8),
                             fontSize = 11.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -819,25 +932,23 @@ fun SoundboxApp(
                                             fontSize = 15.sp,
                                             fontWeight = FontWeight.Bold
                                         )
-                                        if (item.payerName.isNotBlank()) {
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "from ${item.payerName}",
-                                                color = Color.White,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Medium
-                                            )
-                                        }
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Credited",
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
                                     }
                                     Text(
                                         text = "${item.bank} • $timeStr",
-                                        color = Color(0xFF94A3B8),
+                                        color = Color(0xFF64748B),
                                         fontSize = 10.sp
                                     )
                                 }
 
                                 IconButton(
-                                    onClick = { onTestSpeech(item.formattedAmount, item.payerName) },
+                                    onClick = { onTestSpeech(item.formattedAmount) },
                                     modifier = Modifier.size(32.dp)
                                 ) {
                                     Icon(
