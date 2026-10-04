@@ -18,7 +18,7 @@
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="Telugu Soundbox"
+        android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
@@ -33,7 +33,7 @@
         <!-- Notification Listener Service: Catches PhonePe, GPay, Paytm app notifications without needing bank SIM -->
         <service
             android:name=".PaymentNotificationListenerService"
-            android:label="Telugu Soundbox Notification Listener"
+            android:label="UPI Sound Box Notification Listener"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true">
             <intent-filter>
@@ -54,6 +54,7 @@
         <!-- Main Screen -->
         <activity
             android:name=".MainActivity"
+            android:label="@string/app_name"
             android:exported="true"
             android:launchMode="singleTop"
             android:showWhenLocked="true"
