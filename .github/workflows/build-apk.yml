@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK and Play Store AAB
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Compile Telugu Soundbox APK
+    name: Compile UPI Sound Box APK and AAB
     runs-on: ubuntu-latest
 
     steps:
@@ -27,29 +27,35 @@ jobs:
         with:
           gradle-version: 8.4
 
-      - name: Build Debug APK
+      - name: Build Debug APK and Play Store AAB Bundle
         run: |
           set -e
 
-          # 1. Switch into android directory if present
           if [ -d "android" ]; then
             echo "Entering android/ directory..."
             cd android
           fi
 
-          # 2. Fix Windows CRLF line endings in gradlew if uploaded from Windows
           sed -i 's/\r$//' gradlew || true
           chmod +x gradlew || true
 
-          # 3. Compile directly with Gradle 8.4
-          echo "Compiling APK with Gradle 8.4..."
-          gradle assembleDebug --no-daemon --stacktrace
+          echo "Building APK and Play Store AAB with Gradle 8.4..."
+          gradle assembleDebug bundleRelease --no-daemon --stacktrace
 
-      - name: Upload APK Artifact
+      - name: Upload Testing APK
         uses: actions/upload-artifact@v4
         with:
-          name: TeluguSoundbox-APK
+          name: UPISoundBox-Testing-APK
           path: |
             **/app/build/outputs/apk/debug/*.apk
             **/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: Upload Play Store AAB Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: UPISoundBox-PlayStore-AAB
+          path: |
+            **/app/build/outputs/bundle/release/*.aab
+            **/build/outputs/bundle/release/*.aab
           retention-days: 30
