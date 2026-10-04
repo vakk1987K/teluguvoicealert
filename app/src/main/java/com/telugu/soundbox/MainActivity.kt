@@ -799,17 +799,19 @@ fun SoundboxApp(
                 }
             }
 
-            // Quick Test Buttons (Amount Only: 10, 50, 100, 500)
+            // Quick Test Buttons (Amount Only: 10, 50, 100, 500, 1000, 2000, 5000)
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp, bottom = 6.dp)
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Button(
                     onClick = { onTestSpeech("10") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                    modifier = Modifier.weight(1f)
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text("+ ₹10", fontSize = 10.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
                 }
@@ -818,8 +820,7 @@ fun SoundboxApp(
                     onClick = { onTestSpeech("50") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                    modifier = Modifier.weight(1f)
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text("+ ₹50", fontSize = 10.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
                 }
@@ -828,8 +829,7 @@ fun SoundboxApp(
                     onClick = { onTestSpeech("100") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                    modifier = Modifier.weight(1f)
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text("+ ₹100", fontSize = 10.sp, color = Color(0xFFFDE047), fontWeight = FontWeight.Bold)
                 }
@@ -838,10 +838,36 @@ fun SoundboxApp(
                     onClick = { onTestSpeech("500") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                    modifier = Modifier.weight(1f)
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text("+ ₹500", fontSize = 10.sp, color = Color(0xFFF472B6), fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = { onTestSpeech("1000") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("+ ₹1,000", fontSize = 10.sp, color = Color(0xFF818CF8), fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = { onTestSpeech("2000") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("+ ₹2,000", fontSize = 10.sp, color = Color(0xFFA78BFA), fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = { onTestSpeech("5000") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("+ ₹5,000", fontSize = 10.sp, color = Color(0xFFFBBF24), fontWeight = FontWeight.Bold)
                 }
             }
 
