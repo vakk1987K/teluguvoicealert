@@ -76,9 +76,9 @@ object TransactionParser {
             return null
         }
 
-        // 4. Extract Amount (handles ₹210, Rs. 210, INR 210, 210/-, Rs 2,000.50, etc.)
+        // 4. Extract Amount (handles ₹210, ₹1200, ₹2200, Rs. 2,500, INR 10,000, 210/-, etc.)
         val amountPattern = Pattern.compile(
-            "(?:rs\\.?|inr|₹)\\s*([0-9]{1,3}(?:,[0-9]{2,3})*(?:\\.[0-9]{1,2})?|[0-9]+(?:\\.[0-9]{1,2})?)|([0-9]{1,3}(?:,[0-9]{2,3})*(?:\\.[0-9]{1,2})?|[0-9]+(?:\\.[0-9]{1,2})?)\\s*(?:rs\\.?|inr|₹|rupees|\\/-)",
+            "(?:rs\\.?|inr|₹)\\s*([0-9]+(?:,[0-9]+)*(?:\\.[0-9]{1,2})?)|\\b([0-9]+(?:,[0-9]+)*(?:\\.[0-9]{1,2})?)\\s*(?:rs\\.?|inr|₹|rupees|\\/-)",
             Pattern.CASE_INSENSITIVE
         )
         val amountMatcher = amountPattern.matcher(smsOrNotificationText)
@@ -160,6 +160,7 @@ object TransactionParser {
             lower.contains("phonepe") -> "PhonePe"
             lower.contains("gpay") || lower.contains("google pay") || lower.contains("paisa") -> "Google Pay"
             lower.contains("paytm") -> "Paytm"
+            lower.contains("mobikwik") -> "MobiKwik"
             lower.contains("bharatpe") -> "BharatPe"
             lower.contains("bhim") -> "BHIM UPI"
             lower.contains("sbi") || lower.contains("state bank") -> "SBI"
