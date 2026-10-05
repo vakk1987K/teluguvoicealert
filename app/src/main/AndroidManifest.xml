@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    package="com.telugu.soundbox">
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Essential permissions for background notification listener and media playback -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -60,8 +59,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-<uses-permission android:name="android.permission.TURN_SCREEN_ON" />
-<uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     </application>
-
 </manifest>
