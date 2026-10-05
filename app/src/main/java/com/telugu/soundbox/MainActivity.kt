@@ -236,7 +236,7 @@ fun SoundboxApp(
     }
 
     // Auto-refresh permission status whenever user returns to app from system settings
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
@@ -1025,8 +1025,9 @@ fun SoundboxApp(
                 )
             }
 
-            // Real Google AdMob Banner Ad View
-            AdMobBannerView(
+            // AdMob Banner Ad: Permanently pinned at bottom
+            Spacer(modifier = Modifier.height(4.dp))
+            AdMobBanner(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp)
