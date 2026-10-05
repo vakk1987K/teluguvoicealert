@@ -26,6 +26,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             "in.amazon.mShop.android.shopping"
         )
 
+        // Cache recently processed notification keys to prevent duplicate triggers from Android notification updates
         private val recentNotificationKeys = mutableMapOf<String, Long>()
     }
 
@@ -61,6 +62,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             }
         }
 
+        // Check if from UPI / merchant / banking app OR general notification
         val isMonitoredApp = MONITORED_PACKAGES.contains(packageName) ||
                 packageName.contains("upi", ignoreCase = true) ||
                 packageName.contains("pay", ignoreCase = true) ||
@@ -100,13 +102,11 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         // Parse payment details
         val payment = TransactionParser.parse(combinedContent, defaultProvider)
         if (payment != null && payment.isCredit && payment.amount > 0) {
-            // Deduplication: if Bank SMS or prior notification already processed this within 35s, skip!
             if (PaymentStorage.isDuplicate(payment.formattedAmount)) {
                 Log.d(TAG, "Duplicate payment detected from notification (₹${payment.formattedAmount}), skipping voice alert")
                 return
             }
 
-            // Save to lightweight storage. If addPayment returns null, it was an existing duplicate -> skip!
             val addedPayment = PaymentStorage.addPayment(
                 context = applicationContext,
                 amount = payment.amount,
@@ -132,11 +132,11 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
             SoundboxForegroundService.startService(applicationContext)
 
-            val uiIntent = Intent(SmsBroadcastReceiver.ACTION_NEW_PAYMENT).apply {
-                putExtra(SmsBroadcastReceiver.EXTRA_AMOUNT, payment.formattedAmount)
-                putExtra(SmsBroadcastReceiver.EXTRA_PAYER, payment.payerName ?: "")
-                putExtra(SmsBroadcastReceiver.EXTRA_BANK, payment.bank)
-                putExtra(SmsBroadcastReceiver.EXTRA_TEXT, combinedContent)
+            val uiIntent = Intent(PaymentStorage.ACTION_NEW_PAYMENT).apply {
+                putExtra(PaymentStorage.EXTRA_AMOUNT, payment.formattedAmount)
+                putExtra(PaymentStorage.EXTRA_PAYER, payment.payerName ?: "")
+                putExtra(PaymentStorage.EXTRA_BANK, payment.bank)
+                putExtra(PaymentStorage.EXTRA_TEXT, combinedContent)
                 setPackage(applicationContext.packageName)
             }
             sendBroadcast(uiIntent)
@@ -154,16 +154,24 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 Log.w(TAG, "Could not bring MainActivity to lockscreen: ${e.message}")
             }
 
-            TeluguTtsManager.announcePayment(
-                context = applicationContext,
-                amount = payment.formattedAmount,
-                payerName = payment.payerName,
-                onComplete = {
-                    try {
-                        if (wakeLock.isHeld) wakeLock.release()
-                    } catch (_: Exception) {}
-                }
-            )
+            // Speak out loud only if alerts are enabled by the merchant
+            if (PaymentStorage.isAlertsEnabled(applicationContext)) {
+                TeluguTtsManager.announcePayment(
+                    context = applicationContext,
+                    amount = payment.formattedAmount,
+                    payerName = payment.payerName,
+                    onComplete = {
+                        try {
+                            if (wakeLock.isHeld) wakeLock.release()
+                        } catch (_: Exception) {}
+                    }
+                )
+            } else {
+                Log.d(TAG, "Voice alerts currently disabled by merchant, skipping TTS")
+                try {
+                    if (wakeLock.isHeld) wakeLock.release()
+                } catch (_: Exception) {}
+            }
         }
     }
 }
