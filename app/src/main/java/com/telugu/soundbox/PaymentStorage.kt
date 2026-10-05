@@ -50,33 +50,55 @@ object PaymentStorage {
         getPrefs(context).edit().putBoolean(KEY_ALERTS_ENABLED, enabled).apply()
     }
 
-    // Deduplication window: 35 seconds ensures that if both App Notification (PhonePe/GPay)
-    // and Bank SMS arrive (often 5 to 20 seconds apart), only ONE announcement and ONE record is stored.
+    // Deduplication window: 45 seconds ensures that if PhonePe, Google Pay, Paytm, MobiKwik,
+    // or Bank SMS all alert for the same payment, only ONE announcement and ONE record is stored.
     private val recentProcessedAmounts = mutableMapOf<String, Long>()
-    private const val DEDUPLICATION_WINDOW_MS = 35000L
+    private const val DEDUPLICATION_WINDOW_MS = 45000L
 
     @Synchronized
-    fun isDuplicate(amount: String): Boolean {
+    fun isDuplicate(context: Context, amount: Double, formattedAmount: String): Boolean {
         val now = System.currentTimeMillis()
+        val normalized = normalizeAmount(formattedAmount)
 
-        // Clean up entries older than 60 seconds
+        // 1. Clean up entries older than 90 seconds
         val iterator = recentProcessedAmounts.entries.iterator()
         while (iterator.hasNext()) {
-            if (now - iterator.next().value > 60000L) {
+            if (now - iterator.next().value > 90000L) {
                 iterator.remove()
             }
         }
 
-        // Normalize amount representation (e.g. 180 vs 180.00)
-        val normalized = normalizeAmount(amount)
-
+        // 2. Check in-memory map
         val lastTime = recentProcessedAmounts[normalized]
         if (lastTime != null && (now - lastTime) < DEDUPLICATION_WINDOW_MS) {
             Log.d(TAG, "Duplicate check TRUE for amount ₹$normalized (processed ${now - lastTime}ms ago)")
             return true
         }
 
-        // Record this payment timestamp so the subsequent SMS or notification is ignored
+        // 3. Check persistent storage payments
+        val currentList = getPayments(context)
+        val existingDuplicate = currentList.firstOrNull { existing ->
+            Math.abs(existing.amount - amount) < 0.01 && (now - existing.timestamp) < DEDUPLICATION_WINDOW_MS
+        }
+        if (existingDuplicate != null) {
+            Log.d(TAG, "Duplicate check TRUE for amount ₹$amount found in storage (${now - existingDuplicate.timestamp}ms ago)")
+            recentProcessedAmounts[normalized] = now
+            return true
+        }
+
+        // Record this payment timestamp so subsequent duplicate alerts are ignored
+        recentProcessedAmounts[normalized] = now
+        return false
+    }
+
+    @Synchronized
+    fun isDuplicate(amount: String): Boolean {
+        val now = System.currentTimeMillis()
+        val normalized = normalizeAmount(amount)
+        val lastTime = recentProcessedAmounts[normalized]
+        if (lastTime != null && (now - lastTime) < DEDUPLICATION_WINDOW_MS) {
+            return true
+        }
         recentProcessedAmounts[normalized] = now
         return false
     }
@@ -103,7 +125,6 @@ object PaymentStorage {
         val currentList = getPayments(context).toMutableList()
         val now = System.currentTimeMillis()
 
-        // Deduplication: If a payment of the same amount exists within the last 35 seconds, reject it!
         val existingDuplicate = currentList.firstOrNull { existing ->
             Math.abs(existing.amount - amount) < 0.01 && (now - existing.timestamp) < DEDUPLICATION_WINDOW_MS
         }
