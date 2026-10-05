@@ -353,13 +353,13 @@ object TeluguTtsManager {
         currentLanguage = LanguageManager.getLanguage(appContext)
 
         mainHandler.post {
-            tts = TextToSpeech(appContext, { status ->
+            val listener = TextToSpeech.OnInitListener { status ->
                 if (status == TextToSpeech.SUCCESS) {
                     applyLanguage(currentLanguage)
 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                         val audioAttributes = AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                            .setUsage(AudioAttributes.USAGE_ALARM)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                             .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                             .build()
@@ -379,9 +379,18 @@ object TeluguTtsManager {
                         pendingQueue.clear()
                     }
                 } else {
-                    Log.e(TAG, "Failed to initialize TextToSpeech: status=$status")
+                    Log.w(TAG, "Failed to initialize default TextToSpeech, attempting Google TTS")
+                    tts = TextToSpeech(appContext, { fallbackStatus ->
+                        if (fallbackStatus == TextToSpeech.SUCCESS) {
+                            applyLanguage(currentLanguage)
+                            isInitialized = true
+                            onReady?.invoke()
+                        }
+                    }, "com.google.android.tts")
                 }
-            }, "com.google.android.tts")
+            }
+
+            tts = TextToSpeech(appContext, listener)
         }
     }
 
@@ -464,9 +473,15 @@ object TeluguTtsManager {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
             val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            // Ensure volume is at least 90% loud so it is always heard clearly across a shop even with phone locked
+            // Ensure volume is at least 95% loud so it is always heard clearly across a shop even with phone locked
             if (currentVol < (maxVol * 0.85)) {
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (maxVol * 0.95).toInt(), 0)
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, 0)
+            }
+            // Also ensure alarm / notification volume is up
+            val alarmVol = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+            val maxAlarm = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            if (alarmVol < (maxAlarm * 0.85)) {
+                audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarm, 0)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not adjust audio volume: ${e.message}")
@@ -520,13 +535,13 @@ object TeluguTtsManager {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             val params = Bundle()
-            params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
+            params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_ALARM)
             params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
         } else {
             val params = HashMap<String, String>()
             params[TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID] = utteranceId
-            params[TextToSpeech.Engine.KEY_PARAM_STREAM] = AudioManager.STREAM_MUSIC.toString()
+            params[TextToSpeech.Engine.KEY_PARAM_STREAM] = AudioManager.STREAM_ALARM.toString()
             params[TextToSpeech.Engine.KEY_PARAM_VOLUME] = "1.0"
             @Suppress("DEPRECATION")
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params)
@@ -558,7 +573,7 @@ object TeluguTtsManager {
             val audioTrack = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 AudioTrack(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                        .setUsage(AudioAttributes.USAGE_ALARM)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                         .build(),
@@ -574,7 +589,7 @@ object TeluguTtsManager {
             } else {
                 @Suppress("DEPRECATION")
                 AudioTrack(
-                    AudioManager.STREAM_MUSIC,
+                    AudioManager.STREAM_ALARM,
                     sampleRate,
                     AudioFormat.CHANNEL_OUT_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
@@ -597,7 +612,7 @@ object TeluguTtsManager {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val playbackAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()
@@ -611,7 +626,7 @@ object TeluguTtsManager {
             @Suppress("DEPRECATION")
             audioManager.requestAudioFocus(
                 null,
-                AudioManager.STREAM_MUSIC,
+                AudioManager.STREAM_ALARM,
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
             )
         }
@@ -638,12 +653,11 @@ object TeluguTtsManager {
                 if (activeWakeLock?.isHeld == true) {
                     activeWakeLock?.release()
                 }
-                @Suppress("DEPRECATION")
-                val flags = PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-                        PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                        PowerManager.ON_AFTER_RELEASE
-                activeWakeLock = powerManager.newWakeLock(flags, "TeluguSoundbox:TtsWakeLock")
-                activeWakeLock?.acquire(15000L)
+                activeWakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "TeluguSoundbox:TtsWakeLock"
+                )
+                activeWakeLock?.acquire(25000L)
             }
         } catch (e: Exception) {
             Log.w(TAG, "WakeLock acquire failed: ${e.message}")
