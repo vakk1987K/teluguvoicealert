@@ -33,7 +33,22 @@ object PaymentStorage {
     private const val TAG = "PaymentStorage"
     private const val PREFS_NAME = "telugu_soundbox_temp_storage"
     private const val KEY_PAYMENTS = "cached_payments_list"
+    private const val KEY_ALERTS_ENABLED = "soundbox_alerts_active"
     private const val MAX_RECORDS = 250
+
+    const val ACTION_NEW_PAYMENT = "com.telugu.soundbox.ACTION_NEW_PAYMENT"
+    const val EXTRA_AMOUNT = "extra_amount"
+    const val EXTRA_PAYER = "extra_payer"
+    const val EXTRA_BANK = "extra_bank"
+    const val EXTRA_TEXT = "extra_text"
+
+    fun isAlertsEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_ALERTS_ENABLED, true)
+    }
+
+    fun setAlertsEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_ALERTS_ENABLED, enabled).apply()
+    }
 
     // Deduplication window: 35 seconds ensures that if both App Notification (PhonePe/GPay)
     // and Bank SMS arrive (often 5 to 20 seconds apart), only ONE announcement and ONE record is stored.
@@ -88,8 +103,7 @@ object PaymentStorage {
         val currentList = getPayments(context).toMutableList()
         val now = System.currentTimeMillis()
 
-        // CRITICAL FIX FOR 2X DUPLICATES IN RECENT PAYMENTS:
-        // If a payment of the same amount exists within the last 35 seconds, reject it!
+        // Deduplication: If a payment of the same amount exists within the last 35 seconds, reject it!
         val existingDuplicate = currentList.firstOrNull { existing ->
             Math.abs(existing.amount - amount) < 0.01 && (now - existing.timestamp) < DEDUPLICATION_WINDOW_MS
         }
@@ -145,8 +159,6 @@ object PaymentStorage {
             e.printStackTrace()
         }
 
-        // Automatic deduplication: If any existing duplicate payments (same amount within 35 seconds)
-        // are already stored in SharedPreferences, keep only the first one
         val deduped = mutableListOf<StoredPayment>()
         for (item in list) {
             val isDupe = deduped.any { existing ->
