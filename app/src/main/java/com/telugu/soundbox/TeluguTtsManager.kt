@@ -251,83 +251,61 @@ object IndianRupeeToWords {
 
         val crores = amount / 10000000L
         var remainder = amount % 10000000L
-        if (crores > 0) parts.add(convertUnderThousandEnglish(crores) + " crore")
+        if (crores > 0) parts.add("${convertUnderThousandEnglish(crores)} Crore")
 
         val lakhs = remainder / 100000L
         remainder %= 100000L
-        if (lakhs > 0) parts.add(convertUnderThousandEnglish(lakhs) + " lakh")
+        if (lakhs > 0) parts.add("${convertUnderThousandEnglish(lakhs)} Lakh")
 
         val thousands = remainder / 1000L
         remainder %= 1000L
-        if (thousands > 0) parts.add(convertUnderThousandEnglish(thousands) + " thousand")
+        if (thousands > 0) parts.add("${convertUnderThousandEnglish(thousands)} Thousand")
 
         val hundreds = remainder / 100L
         remainder %= 100L
-        if (hundreds > 0) parts.add(convertUnderThousandEnglish(hundreds) + " hundred")
+        if (hundreds > 0) parts.add("${convertUnderThousandEnglish(hundreds)} Hundred")
 
-        if (remainder > 0) parts.add(convertUnderHundredEnglish(remainder))
+        if (remainder > 0) parts.add(convertUnderThousandEnglish(remainder))
 
         val paise = ((amountDouble - amount) * 100).toInt()
-        val baseWords = parts.joinToString(" ").trim()
-        return if (paise > 0) "$baseWords rupees and $paise paise" else "$baseWords rupees"
+        val base = parts.joinToString(" ").trim()
+        return if (paise > 0) "$base Rupees and $paise Paise" else "$base Rupees"
     }
 
     private fun convertUnderThousandEnglish(n: Long): String {
-        val hundreds = n / 100L
-        val rem = n % 100L
-        val p = mutableListOf<String>()
-        if (hundreds > 0) {
-            p.add(convertUnderHundredEnglish(hundreds) + " hundred")
-        }
-        if (rem > 0) {
-            p.add(convertUnderHundredEnglish(rem))
-        }
-        return p.joinToString(" ").trim()
-    }
+        val units = arrayOf(
+            "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+            "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+            "Seventeen", "Eighteen", "Nineteen"
+        )
+        val tens = arrayOf(
+            "", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"
+        )
 
-    private fun convertUnderHundredEnglish(n: Long): String {
-        val units = mapOf(
-            1L to "one", 2L to "two", 3L to "three", 4L to "four", 5L to "five",
-            6L to "six", 7L to "seven", 8L to "eight", 9L to "nine", 10L to "ten",
-            11L to "eleven", 12L to "twelve", 13L to "thirteen", 14L to "fourteen",
-            15L to "fifteen", 16L to "sixteen", 17L to "seventeen", 18L to "eighteen", 19L to "nineteen"
-        )
-        if (n in 1L..19L) return units[n] ?: ""
-        val tens = mapOf(
-            20L to "twenty", 30L to "thirty", 40L to "forty", 50L to "fifty",
-            60L to "sixty", 70L to "seventy", 80L to "eighty", 90L to "ninety"
-        )
-        val ten = (n / 10L) * 10L
-        val u = n % 10L
-        val tenStr = tens[ten] ?: ""
-        return if (u == 0L) tenStr else "$tenStr ${units[u] ?: ""}".trim()
+        return when {
+            n < 20 -> units[n.toInt()]
+            n < 100 -> "${tens[(n / 10).toInt()]} ${units[(n % 10).toInt()]}".trim()
+            else -> "${units[(n / 100).toInt()]} Hundred ${convertUnderThousandEnglish(n % 100)}".trim()
+        }
     }
 }
 
 object LanguageManager {
     private const val PREFS_NAME = "soundbox_lang_prefs"
-    private const val KEY_LANG = "soundbox_language"
+    private const val KEY_LANG = "active_language"
 
     fun getLanguage(context: Context): SoundboxLanguage {
-        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val code = prefs.getString(KEY_LANG, "te") ?: "te"
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val code = prefs.getString(KEY_LANG, SoundboxLanguage.TELUGU.code) ?: SoundboxLanguage.TELUGU.code
         return SoundboxLanguage.fromCode(code)
     }
 
     fun setLanguage(context: Context, language: SoundboxLanguage) {
-        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putString(KEY_LANG, language.code).apply()
-        TeluguTtsManager.setLanguage(context, language)
     }
 
-    /**
-     * Converts numeric amount (e.g. 7500) into native, grammatically correct
-     * Indian spoken words so Text-To-Speech never reads digit-by-digit or cuts off!
-     */
-    fun getAnnouncementSentence(
-        language: SoundboxLanguage,
-        amountStr: String
-    ): String {
+    fun getAnnouncementSentence(language: SoundboxLanguage, amountStr: String): String {
         val cleanAmount = amountStr.replace(",", "").toDoubleOrNull() ?: 0.0
 
         return when (language) {
@@ -337,45 +315,40 @@ object LanguageManager {
             }
             SoundboxLanguage.HINDI -> {
                 val words = IndianRupeeToWords.toHindi(cleanAmount)
-                "$words आपके खाते में प्राप्त हुए हैं।"
+                "$words प्राप्त हुए।"
             }
             SoundboxLanguage.MARATHI -> {
                 val words = IndianRupeeToWords.toHindi(cleanAmount)
-                "$words आपल्या खात्यात जमा झाले आहेत."
+                "$words खात्यात जमा झाले आहेत."
             }
             SoundboxLanguage.GUJARATI -> {
                 val words = IndianRupeeToWords.toHindi(cleanAmount)
-                "$words તમારા ખાતામાં જમા થયા છે."
+                "$words ખાતામાં જમા થયા છે."
             }
             SoundboxLanguage.TAMIL -> {
                 val words = IndianRupeeToWords.toEnglish(cleanAmount)
-                "$words உங்கள் கணக்கில் வரவு வைக்கப்பட்டது."
+                "$words உங்கள் கணக்கில் வரவு வைக்கப்பட்டுள்ளது."
             }
             SoundboxLanguage.ENGLISH -> {
                 val words = IndianRupeeToWords.toEnglish(cleanAmount)
-                "$words received successfully."
+                "Received $words."
             }
         }
     }
 }
 
 object TeluguTtsManager {
-    private const val TAG = "SoundboxTtsManager"
+
+    private const val TAG = "TeluguTtsManager"
     private var tts: TextToSpeech? = null
     private var isInitialized = false
-    private var currentLanguage: SoundboxLanguage = SoundboxLanguage.TELUGU
     private val pendingQueue = mutableListOf<Pair<String, (() -> Unit)?>>()
     private val mainHandler = Handler(Looper.getMainLooper())
-
     private var activeWakeLock: PowerManager.WakeLock? = null
     private var audioFocusRequest: Any? = null
+    private var currentLanguage: SoundboxLanguage = SoundboxLanguage.TELUGU
 
     fun init(context: Context, onReady: (() -> Unit)? = null) {
-        if (isInitialized && tts != null) {
-            onReady?.invoke()
-            return
-        }
-
         val appContext = context.applicationContext
         currentLanguage = LanguageManager.getLanguage(appContext)
 
@@ -456,10 +429,6 @@ object TeluguTtsManager {
         }
     }
 
-    /**
-     * Announce incoming payment with chime and amount-only voice.
-     * Uses natural Indian words (e.g. 7500 -> "ఏడు వేల ఐదు వందల రూపాయలు")
-     */
     fun announcePayment(
         context: Context,
         amount: String,
@@ -495,8 +464,9 @@ object TeluguTtsManager {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
             val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            if (currentVol < (maxVol * 0.6)) {
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (maxVol * 0.85).toInt(), 0)
+            // Ensure volume is at least 90% loud so it is always heard clearly across a shop even with phone locked
+            if (currentVol < (maxVol * 0.85)) {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (maxVol * 0.95).toInt(), 0)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not adjust audio volume: ${e.message}")
@@ -570,6 +540,7 @@ object TeluguTtsManager {
             val numSamples = (durationSec * sampleRate).toInt()
             val sample = ShortArray(numSamples)
 
+            // Two-tone bell chime: 880Hz (A5) then 1174Hz (D6)
             for (i in 0 until numSamples) {
                 val t = i.toDouble() / sampleRate
                 val freq = if (t < 0.15) 880.0 else 1174.66
@@ -589,14 +560,15 @@ object TeluguTtsManager {
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                         .build(),
                     AudioFormat.Builder()
                         .setSampleRate(sampleRate)
                         .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                         .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                         .build(),
-                    sample.size * 2,
-                    AudioTrack.MODE_STATIC,
+                    bufferSize,
+                    AudioTrack.MODE_STREAM,
                     AudioManager.AUDIO_SESSION_ID_GENERATE
                 )
             } else {
@@ -627,8 +599,9 @@ object TeluguTtsManager {
             val playbackAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()
-            val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                 .setAudioAttributes(playbackAttributes)
                 .setAcceptsDelayedFocusGain(false)
                 .build()
@@ -639,7 +612,7 @@ object TeluguTtsManager {
             audioManager.requestAudioFocus(
                 null,
                 AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
             )
         }
     }
