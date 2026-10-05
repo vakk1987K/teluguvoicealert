@@ -13,31 +13,70 @@ data class ParsedPayment(
 
 object TransactionParser {
 
-    private val STRICT_DEBIT_WORDS = setOf(
-        "otp", "one time password", "verification code", "secret code",
-        "debited", "spent", "withdrawn", "atm wdl", "card ending",
-        "due date", "emi due", "bill due", "payment request", "requested money"
+    // Unconditional debit and non-transaction rejection terms
+    private val STRICT_DEBIT_DISQUALIFIERS = listOf(
+        "debited", "debit", " dr.", " dr ", "dr/", "/dr", "dr alert",
+        "you paid", "you have paid", "you've paid",
+        "you sent", "you have sent", "you've sent",
+        "you transferred", "you have transferred",
+        "paid successfully to", "successful payment to",
+        "spent", "spent on", "spent at",
+        "withdrawn", "withdrawal", "atm wdl", "cash withdrawal",
+        "purchase at", "purchased at", "buying at",
+        "recharge of", "recharge successful", "recharged for",
+        "bill paid", "bill payment", "due date", "emi due",
+        "requested money", "payment request", "requested from you",
+        "otp", "one time password", "verification code", "secret code"
+    )
+
+    // Directional debit phrases (unless followed by "you" or "your")
+    private val DIRECTIONAL_DEBIT_PHRASES = listOf(
+        "paid to",
+        "payment to",
+        "sent to",
+        "money sent to",
+        "transferred to"
+    )
+
+    // Positive incoming credit keywords - AT LEAST ONE MUST BE PRESENT!
+    private val POSITIVE_CREDIT_PHRASES = listOf(
+        "credited", "credit", "is credited", "has been credited", "credited with", "credited to",
+        "received", "received payment", "payment received", "money received", "received from",
+        "paid you", "has paid you", "paid to you", "paid to your",
+        "sent you", "has sent you", "sent to you", "sent to your",
+        "transferred to you", "transferred to your", "transferred by",
+        "deposited into", "deposited to", "added to your",
+        "money credited", "amount credited"
     )
 
     fun parse(smsOrNotificationText: String, defaultProvider: String = ""): ParsedPayment? {
         val lower = smsOrNotificationText.lowercase()
 
-        // 1. Safety check: Ignore OTPs, debits, bills, or payment requests
-        for (ignored in STRICT_DEBIT_WORDS) {
-            if (lower.contains(ignored)) {
+        // 1. REJECT ALL STRICT DEBITS (e.g. debited, spent, withdrawn, you paid, bill, OTP)
+        for (debitWord in STRICT_DEBIT_DISQUALIFIERS) {
+            if (lower.contains(debitWord)) {
                 return null
             }
         }
 
-        // Safety check for "paid to" - only ignore if not "paid to you" or "paid to your"
-        if (lower.contains("paid to") && !lower.contains("paid to you") && !lower.contains("paid to your")) {
-            return null
+        // 2. REJECT DIRECTIONAL DEBITS (e.g. "paid to Ramesh", "sent to Kiran")
+        for (directional in DIRECTIONAL_DEBIT_PHRASES) {
+            if (lower.contains(directional)) {
+                // If it specifically says "paid to you" or "paid to your", it's credit; otherwise it is a debit!
+                val isToUser = lower.contains("$directional you") || lower.contains("$directional your")
+                if (!isToUser) {
+                    return null
+                }
+            }
         }
-        if (lower.contains("sent to") && !lower.contains("sent to you") && !lower.contains("sent to your")) {
+
+        // 3. MUST CONTAIN AT LEAST ONE POSITIVE CREDIT CONFIRMATION PHRASE
+        val hasPositiveCredit = POSITIVE_CREDIT_PHRASES.any { lower.contains(it) }
+        if (!hasPositiveCredit) {
             return null
         }
 
-        // 2. Extract Amount first (handles ₹210, Rs. 210, 210 Rs, INR 210, ₹ 2,000, 210/-, etc.)
+        // 4. Extract Amount (handles ₹210, Rs. 210, INR 210, 210/-, Rs 2,000.50, etc.)
         val amountPattern = Pattern.compile(
             "(?:rs\\.?|inr|₹)\\s*([0-9]{1,3}(?:,[0-9]{2,3})*(?:\\.[0-9]{1,2})?|[0-9]+(?:\\.[0-9]{1,2})?)|([0-9]{1,3}(?:,[0-9]{2,3})*(?:\\.[0-9]{1,2})?|[0-9]+(?:\\.[0-9]{1,2})?)\\s*(?:rs\\.?|inr|₹|rupees|\\/-)",
             Pattern.CASE_INSENSITIVE
@@ -51,25 +90,10 @@ object TransactionParser {
         val amount = rawAmountStr.toDoubleOrNull() ?: return null
         if (amount <= 0.0) return null
 
-        // 3. Check for Credit Keywords (Bank SMS & UPI Apps: PhonePe, GPay, Paytm)
-        val isCreditKeyword = lower.contains("credited") ||
-                lower.contains("received") ||
-                lower.contains("paid") ||
-                lower.contains("sent") ||
-                lower.contains("transfer") ||
-                lower.contains("payment") ||
-                lower.contains("deposited") ||
-                lower.contains("added") ||
-                lower.contains("successful") ||
-                lower.contains("cleared") ||
-                defaultProvider.isNotBlank()
-
-        if (!isCreditKeyword) {
-            return null
-        }
-
+        // 5. Extract Payer Name ("Ramesh paid you", "from Suresh", "by Priya", etc.)
         val payerName = extractPayerName(smsOrNotificationText)
 
+        // 6. Detect Bank / Provider
         val detectedBank = detectBank(smsOrNotificationText)
         val bank = if (detectedBank != "Bank" || defaultProvider.isEmpty()) detectedBank else defaultProvider
 
