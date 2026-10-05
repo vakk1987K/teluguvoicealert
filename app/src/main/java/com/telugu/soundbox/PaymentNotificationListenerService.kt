@@ -14,16 +14,32 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
         private val MONITORED_PACKAGES = setOf(
             "com.phonepe.app",
+            "com.phonepe.app.business",
             "com.phonepe.merchant",
             "com.google.android.apps.nbu.paisa.user",
             "com.google.android.apps.nbu.paisa.merchant",
             "net.one97.paytm",
             "com.paytm.business",
-            "com.bharatpe.app",
+            "com.mobikwik_new",
+            "com.mobikwik.zaakpay.merchant",
             "in.org.npci.upiapp", // BHIM
+            "com.bharatpe.app",
             "com.dreamplug.androidapp", // CRED
             "com.whatsapp",
-            "in.amazon.mShop.android.shopping"
+            "in.amazon.mShop.android.shopping",
+            "com.freecharge.android",
+            "com.myairtelapp",
+            "com.jio.myjio",
+            "com.sbi.lotusintouch", // YONO SBI
+            "com.sbi.upi", // BHIM SBI
+            "com.snapwork.hdfc", // HDFC
+            "com.csam.icici.bank.imobile", // ICICI
+            "com.axis.mobile", // Axis
+            "com.msf.kbank.mobile", // Kotak
+            "com.canarabank.mobility", // Canara
+            "com.fss.pnb", // PNB
+            "com.bankofbaroda.mconnect", // BOB
+            "com.unionbank.ecommerce.mobile.android" // Union
         )
 
         // Cache recently processed notification keys to prevent duplicate triggers from Android notification updates
@@ -94,19 +110,22 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             packageName.contains("phonepe") -> "PhonePe"
             packageName.contains("paisa") || packageName.contains("google") -> "Google Pay"
             packageName.contains("paytm") -> "Paytm"
+            packageName.contains("mobikwik") -> "MobiKwik"
             packageName.contains("bharatpe") -> "BharatPe"
             packageName.contains("bhim") -> "BHIM UPI"
             else -> ""
         }
 
-        // Parse payment details
+        // Parse payment details (strictly positive credit only!)
         val payment = TransactionParser.parse(combinedContent, defaultProvider)
         if (payment != null && payment.isCredit && payment.amount > 0) {
-            if (PaymentStorage.isDuplicate(payment.formattedAmount)) {
+            // Deduplication: if another app (PhonePe, GPay, Paytm, MobiKwik) or Bank SMS already alerted within 45s, skip!
+            if (PaymentStorage.isDuplicate(applicationContext, payment.amount, payment.formattedAmount)) {
                 Log.d(TAG, "Duplicate payment detected from notification (₹${payment.formattedAmount}), skipping voice alert")
                 return
             }
 
+            // Save to lightweight storage. If addPayment returns null, it was an existing duplicate -> skip!
             val addedPayment = PaymentStorage.addPayment(
                 context = applicationContext,
                 amount = payment.amount,
@@ -123,15 +142,19 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
             Log.i(TAG, "Credit detected via notification! Amount: ₹${payment.formattedAmount}, Payer: ${payment.payerName}, App: ${payment.bank}")
 
+            // 1. Keep CPU and Screen awake so TTS audio plays loud and clear on lock screen (Android 14, 15, 16)
             val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+            @Suppress("DEPRECATION")
             val wakeLock = powerManager.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
                 "TeluguSoundbox::NotificationWakeLock"
             )
-            wakeLock.acquire(20000L)
+            wakeLock.acquire(20000L) // 20s safety limit
 
+            // 2. Ensure foreground service is running
             SoundboxForegroundService.startService(applicationContext)
 
+            // 3. Update UI
             val uiIntent = Intent(PaymentStorage.ACTION_NEW_PAYMENT).apply {
                 putExtra(PaymentStorage.EXTRA_AMOUNT, payment.formattedAmount)
                 putExtra(PaymentStorage.EXTRA_PAYER, payment.payerName ?: "")
@@ -154,7 +177,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 Log.w(TAG, "Could not bring MainActivity to lockscreen: ${e.message}")
             }
 
-            // Speak out loud only if alerts are enabled by the merchant
+            // 4. Speak out loud only if alerts are enabled by the merchant
             if (PaymentStorage.isAlertsEnabled(applicationContext)) {
                 TeluguTtsManager.announcePayment(
                     context = applicationContext,
