@@ -76,9 +76,9 @@ object TransactionParser {
             return null
         }
 
-        // 4. Extract Amount (handles ₹210, ₹1200, ₹2200, Rs. 2,500, INR 10,000, 210/-, etc.)
+        // 4. Extract Amount (handles ₹1300, ₹2200, ₹1,300.00, Rs 1300, INR 1300, 1300/-, 1300 Rs)
         val amountPattern = Pattern.compile(
-            "(?:rs\\.?|inr|₹)\\s*([0-9]+(?:,[0-9]+)*(?:\\.[0-9]{1,2})?)|\\b([0-9]+(?:,[0-9]+)*(?:\\.[0-9]{1,2})?)\\s*(?:rs\\.?|inr|₹|rupees|\\/-)",
+            "(?:rs\\.?|inr|₹)\\s*([0-9]+(?:,[0-9]+)*(?:\\.[0-9]{1,2})?)|(?:credited\\s+(?:with|by)|received|payment\\s+of|amount\\s+of)\\s+(?:rs\\.?|inr|₹)?\\s*([0-9]+(?:,[0-9]+)*(?:\\.[0-9]{1,2})?)|\\b([0-9]+(?:,[0-9]+)*(?:\\.[0-9]{1,2})?)\\s*(?:rs\\.?|inr|₹|rupees|\\/-)",
             Pattern.CASE_INSENSITIVE
         )
         val amountMatcher = amountPattern.matcher(smsOrNotificationText)
@@ -86,7 +86,7 @@ object TransactionParser {
             return null
         }
 
-        val rawAmountStr = (amountMatcher.group(1) ?: amountMatcher.group(2))?.replace(",", "") ?: return null
+        val rawAmountStr = (amountMatcher.group(1) ?: amountMatcher.group(2) ?: amountMatcher.group(3))?.replace(",", "") ?: return null
         val amount = rawAmountStr.toDoubleOrNull() ?: return null
         if (amount <= 0.0) return null
 
