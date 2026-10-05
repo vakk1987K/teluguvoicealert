@@ -1,6 +1,5 @@
 package com.telugu.soundbox
 
-import android.Manifest
 import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -17,9 +16,7 @@ import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -75,7 +72,7 @@ class MainActivity : ComponentActivity() {
 
     private val paymentReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == SmsBroadcastReceiver.ACTION_NEW_PAYMENT) {
+            if (intent?.action == PaymentStorage.ACTION_NEW_PAYMENT) {
                 refreshData()
             }
         }
@@ -101,7 +98,7 @@ class MainActivity : ComponentActivity() {
         SoundboxForegroundService.startService(this)
         AdMobManager.initialize(applicationContext)
 
-        val filter = IntentFilter(SmsBroadcastReceiver.ACTION_NEW_PAYMENT)
+        val filter = IntentFilter(PaymentStorage.ACTION_NEW_PAYMENT)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(paymentReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -211,10 +208,8 @@ fun SoundboxApp(
     onRequestNotificationAccess: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var hasSmsPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
-        )
+    var isAlertsActive by remember {
+        mutableStateOf(PaymentStorage.isAlertsEnabled(context))
     }
 
     var isNotificationAccessGranted by remember {
@@ -240,12 +235,24 @@ fun SoundboxApp(
         )
     }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { perms ->
-        hasSmsPermission = perms[Manifest.permission.RECEIVE_SMS] == true
-        if (hasSmsPermission) {
-            SoundboxForegroundService.startService(context)
+    // Auto-refresh permission status whenever user returns to app from system settings
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                try {
+                    val cn = ComponentName(context, PaymentNotificationListenerService::class.java)
+                    val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+                    isNotificationAccessGranted = flat != null && flat.contains(cn.flattenToString())
+                } catch (_: Exception) {}
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && powerManager != null) {
+                    isBatteryOptIgnored = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -292,7 +299,7 @@ fun SoundboxApp(
         )
     }
 
-    // Privacy Policy Dialog (For 100% Google Play Store Compliance)
+    // Privacy Policy Dialog
     if (showPrivacyPolicyDialog) {
         AlertDialog(
             onDismissRequest = { showPrivacyPolicyDialog = false },
@@ -300,16 +307,16 @@ fun SoundboxApp(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.Security,
-                        contentDescription = "Privacy Policy",
-                        tint = Color(0xFF34D399),
-                        modifier = Modifier.size(22.dp)
+                        contentDescription = "Security",
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        "Privacy Policy",
+                        text = "100% On-Device Privacy",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 17.sp
+                        fontSize = 16.sp
                     )
                 }
             },
@@ -317,26 +324,10 @@ fun SoundboxApp(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 380.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
                     Text(
-                        text = "100% On-Device Local Processing",
-                        color = Color(0xFF34D399),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "UPI Sound Box: Payment Alert does NOT collect, upload, share, or sell any personal or financial data. All SMS and notification parsing happens strictly on your physical device.",
-                        color = Color(0xFFE2E8F0),
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Text(
-                        text = "No Cloud Storage & Zero Server Transmission",
+                        text = "Zero Data Collection Policy",
                         color = Color(0xFF34D399),
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
@@ -358,7 +349,7 @@ fun SoundboxApp(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "• Notification Access: Detects UPI payment amounts from PhonePe, GPay, Paytm, etc., to speak voice alerts.\n• SMS Permissions: Reads incoming bank credit alerts to announce received payments.\n• Foreground Service: Keeps voice active when your phone screen is locked.",
+                        text = "• Notification Access: Detects incoming UPI payments from PhonePe, GPay, Paytm, BHIM, and bank notifications to speak voice alerts.\n• Foreground Service: Keeps soundbox voice active even when your phone screen is locked.",
                         color = Color(0xFF94A3B8),
                         fontSize = 11.sp,
                         lineHeight = 15.sp
@@ -426,16 +417,18 @@ fun SoundboxApp(
         ) {
             // Header
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f, fill = false)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "UPI Sound Box",
                             color = Color.White,
-                            fontSize = 18.sp,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.width(6.dp))
@@ -453,7 +446,7 @@ fun SoundboxApp(
                                     imageVector = Icons.Default.Security,
                                     contentDescription = "Privacy Policy",
                                     tint = Color(0xFF38BDF8),
-                                    modifier = Modifier.size(12.dp)
+                                    modifier = Modifier.size(11.dp)
                                 )
                                 Spacer(modifier = Modifier.width(3.dp))
                                 Text("Policy", color = Color(0xFF38BDF8), fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -463,67 +456,81 @@ fun SoundboxApp(
                     Text(
                         text = "Payment Alert • ${currentLanguage.bannerSubtitle}",
                         color = Color(0xFF10B981),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (hasSmsPermission) Color(0xFF064E3B) else Color(0xFF7C2D12),
-                        modifier = Modifier.clickable {
-                            val permsToRequest = mutableListOf(
-                                Manifest.permission.RECEIVE_SMS,
-                                Manifest.permission.READ_SMS
-                            )
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                permsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
-                            }
-                            permissionLauncher.launch(permsToRequest.toTypedArray())
-                        }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (hasSmsPermission) Icons.Default.CheckCircle else Icons.Default.Warning,
-                                contentDescription = null,
-                                tint = if (hasSmsPermission) Color(0xFF34D399) else Color(0xFFF87171),
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = if (hasSmsPermission) "SMS OK" else "Enable SMS",
-                                color = if (hasSmsPermission) Color(0xFFA7F3D0) else Color(0xFFFECACA),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
+                Spacer(modifier = Modifier.width(8.dp))
 
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Unified Alerts Button: Supports Enable (Grant Permission) and Disable / Re-enable Alerts!
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = if (isNotificationAccessGranted) Color(0xFF064E3B) else Color(0xFF7C2D12),
+                        color = when {
+                            !isNotificationAccessGranted -> Color(0xFF7C2D12)
+                            isAlertsActive -> Color(0xFF064E3B)
+                            else -> Color(0xFF334155)
+                        },
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            when {
+                                !isNotificationAccessGranted -> Color(0xFFEF4444)
+                                isAlertsActive -> Color(0xFF10B981)
+                                else -> Color(0xFF64748B)
+                            }
+                        ),
                         modifier = Modifier.clickable {
-                            onRequestNotificationAccess()
+                            if (!isNotificationAccessGranted) {
+                                onRequestNotificationAccess()
+                            } else {
+                                val nextState = !isAlertsActive
+                                isAlertsActive = nextState
+                                PaymentStorage.setAlertsEnabled(context, nextState)
+                                if (nextState) {
+                                    Toast.makeText(context, "🔔 UPI Voice Alerts: ON", Toast.LENGTH_SHORT).show()
+                                    onTestSpeech("10")
+                                } else {
+                                    Toast.makeText(context, "🔕 UPI Voice Alerts: PAUSED", Toast.LENGTH_SHORT).show()
+                                }
+                            }
                         }
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Notifications,
+                                imageVector = when {
+                                    !isNotificationAccessGranted -> Icons.Default.Warning
+                                    isAlertsActive -> Icons.Default.Notifications
+                                    else -> Icons.Default.Notifications
+                                },
                                 contentDescription = null,
-                                tint = if (isNotificationAccessGranted) Color(0xFF34D399) else Color(0xFFF87171),
-                                modifier = Modifier.size(14.dp)
+                                tint = when {
+                                    !isNotificationAccessGranted -> Color(0xFFF87171)
+                                    isAlertsActive -> Color(0xFF34D399)
+                                    else -> Color(0xFF94A3B8)
+                                },
+                                modifier = Modifier.size(15.dp)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = if (isNotificationAccessGranted) "Apps OK" else "GPay/PhonePe",
-                                color = if (isNotificationAccessGranted) Color(0xFFA7F3D0) else Color(0xFFFECACA),
+                                text = when {
+                                    !isNotificationAccessGranted -> "Enable Alerts"
+                                    isAlertsActive -> "Alerts: ON"
+                                    else -> "Alerts: OFF"
+                                },
+                                color = when {
+                                    !isNotificationAccessGranted -> Color(0xFFFECACA)
+                                    isAlertsActive -> Color(0xFFA7F3D0)
+                                    else -> Color(0xFFCBD5E1)
+                                },
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -537,21 +544,14 @@ fun SoundboxApp(
                             modifier = Modifier.clickable { onRequestBatteryOptimization() }
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.BatteryChargingFull,
-                                    contentDescription = null,
+                                    contentDescription = "Battery Optimization",
                                     tint = Color(0xFFF87171),
                                     modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Battery",
-                                    color = Color(0xFFFECACA),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
                                 )
                             }
                         }
@@ -602,58 +602,70 @@ fun SoundboxApp(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                PeriodTab(
-                    label = "Today",
-                    isSelected = selectedPeriod == TimePeriod.TODAY,
-                    onClick = { selectedPeriod = TimePeriod.TODAY }
-                )
-                PeriodTab(
-                    label = "7 Days",
-                    isSelected = selectedPeriod == TimePeriod.SEVEN_DAYS,
-                    onClick = { selectedPeriod = TimePeriod.SEVEN_DAYS }
-                )
-                PeriodTab(
-                    label = "15 Days",
-                    isSelected = selectedPeriod == TimePeriod.FIFTEEN_DAYS,
-                    onClick = { selectedPeriod = TimePeriod.FIFTEEN_DAYS }
-                )
-                PeriodTab(
-                    label = "30 Days",
-                    isSelected = selectedPeriod == TimePeriod.THIRTY_DAYS,
-                    onClick = { selectedPeriod = TimePeriod.THIRTY_DAYS }
-                )
+                TimePeriod.values().forEach { period ->
+                    val isSelected = selectedPeriod == period
+                    val label = when (period) {
+                        TimePeriod.TODAY -> "Today"
+                        TimePeriod.SEVEN_DAYS -> "7 Days"
+                        TimePeriod.FIFTEEN_DAYS -> "15 Days"
+                        TimePeriod.THIRTY_DAYS -> "30 Days"
+                    }
+
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { selectedPeriod = period },
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isSelected) Color(0xFF10B981) else Color(0xFF1E293B)
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(vertical = 5.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
             }
 
-            // Main Collection Card
-            Surface(
+            // Summary Card
+            Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp),
-                color = Color(0xFF1E293B),
-                shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    val periodLabel = when (selectedPeriod) {
+                        TimePeriod.TODAY -> "TODAY (${currentLanguage.todayLabel})"
+                        TimePeriod.SEVEN_DAYS -> "LAST 7 DAYS"
+                        TimePeriod.FIFTEEN_DAYS -> "LAST 15 DAYS"
+                        TimePeriod.THIRTY_DAYS -> "LAST 30 DAYS"
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = when (selectedPeriod) {
-                                TimePeriod.TODAY -> "TODAY (ఈరోజు) RECEIVED"
-                                TimePeriod.SEVEN_DAYS -> "LAST 7 DAYS RECEIVED"
-                                TimePeriod.FIFTEEN_DAYS -> "LAST 15 DAYS RECEIVED"
-                                TimePeriod.THIRTY_DAYS -> "LAST 30 DAYS RECEIVED"
-                            },
+                            text = "$periodLabel RECEIVED",
                             color = Color(0xFF94A3B8),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.5.sp
                         )
-
                         Text(
                             text = "${currentPeriodSummary.totalOrders} Payments",
                             color = Color(0xFF38BDF8),
@@ -662,90 +674,82 @@ fun SoundboxApp(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
 
                     Text(
-                        text = "₹" + String.format(java.util.Locale.US, "%,.2f", currentPeriodSummary.totalAmount),
+                        text = "₹${String.format("%.2f", currentPeriodSummary.totalAmount)}",
                         color = Color(0xFF34D399),
-                        fontSize = 32.sp,
+                        fontSize = 28.sp,
                         fontWeight = FontWeight.ExtraBold
                     )
                 }
             }
 
-            // Soundbox Speaker Center Disc
-            Row(
+            // Big Center Test Voice Button
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(vertical = 4.dp)
+                    .size(96.dp)
+                    .scale(pulseScale)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(Color(0xFF059669), Color(0xFF047857), Color(0xFF064E3B))
+                        )
+                    )
+                    .border(3.dp, Color(0xFF34D399), CircleShape)
+                    .clickable { onTestSpeech("100") },
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(76.dp)
-                        .scale(if (hasSmsPermission || isNotificationAccessGranted) pulseScale else 1.0f)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(Color(0xFF10B981), Color(0xFF065F46), Color(0xFF022C22))
-                            )
-                        )
-                        .border(2.dp, Color(0xFF34D399), CircleShape)
-                        .clickable {
-                            onTestSpeech("7500")
-                        }
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.VolumeUp,
-                            contentDescription = "Speaker",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
-                        Text(
-                            text = "TEST",
-                            color = Color(0xFFA7F3D0),
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(10.dp))
-
-                Surface(
-                    color = Color(0xFF1E293B),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "Lock Screen Audio",
-                            tint = Color(0xFF38BDF8),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Amount-Only Voice Alert: Announces in ${currentLanguage.displayName} on lock screen",
-                            color = Color(0xFFE2E8F0),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium,
-                            lineHeight = 13.sp
-                        )
-                    }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.VolumeUp,
+                        contentDescription = "Test Speech",
+                        tint = Color.White,
+                        modifier = Modifier.size(34.dp)
+                    )
+                    Text(
+                        text = "TEST",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 
-            // Quick Test Buttons (Amount Only: 10, 50, 100, 500, 1000, 2000, 5000, 7500)
+            // Lock Screen Voice Announcement Notice Banner
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = Color(0xFF1E293B)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Lock Screen",
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Amount-Only Voice Alert: Announces in ${currentLanguage.displayName} on lock screen",
+                        color = Color(0xFFE2E8F0),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            // Quick Speech Test Buttons
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 4.dp, bottom = 4.dp)
+                    .padding(vertical = 3.dp)
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
@@ -822,7 +826,7 @@ fun SoundboxApp(
                 }
             }
 
-            // AdMob Test Ads Controls (Ad #2 Interstitial & Ad #3 Rewarded)
+            // AdMob Test Ads Controls
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -856,13 +860,15 @@ fun SoundboxApp(
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(vertical = 5.dp)
                 ) {
-                    Text("🎁 Test Rewarded Ad", fontSize = 10.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
+                    Text("🎁 Test Rewarded Ad", fontSize = 10.sp, color = Color(0xFFFBBF24), fontWeight = FontWeight.Bold)
                 }
             }
 
-            // Recent Payments List
+            // Transactions Header
             Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp, bottom = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -870,12 +876,11 @@ fun SoundboxApp(
                     text = "RECENT PAYMENTS (${payments.size})",
                     color = Color(0xFF94A3B8),
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { showPrivacyPolicyDialog = true }
-                ) {
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.Security,
                         contentDescription = "Privacy Policy",
@@ -923,7 +928,7 @@ fun SoundboxApp(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Pay using PhonePe, GPay, Paytm or send a bank credit SMS to test instant audio announcements.",
+                            text = "Pay using PhonePe, GPay, Paytm or banking apps to test instant audio announcements.",
                             color = Color(0xFF94A3B8),
                             fontSize = 11.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -948,56 +953,60 @@ fun SoundboxApp(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
-                                modifier = Modifier.padding(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(34.dp)
+                                            .background(Color(0xFF0F2E3A), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
                                         Text(
-                                            text = "₹${item.formattedAmount}",
+                                            text = "₹",
                                             color = Color(0xFF34D399),
-                                            fontSize = 15.sp,
+                                            fontSize = 16.sp,
                                             fontWeight = FontWeight.Bold
                                         )
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
                                         Text(
-                                            text = "Credited",
-                                            color = Color(0xFF94A3B8),
+                                            text = if (item.payerName.isNotBlank()) item.payerName else item.bank,
+                                            color = Color.White,
                                             fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = timeStr,
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 10.sp
                                         )
                                     }
-                                    Text(
-                                        text = "${item.bank} • $timeStr",
-                                        color = Color(0xFF64748B),
-                                        fontSize = 10.sp
-                                    )
                                 }
 
-                                IconButton(
-                                    onClick = { onTestSpeech(item.formattedAmount) },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Replay Voice",
-                                        tint = Color(0xFF34D399),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
+                                Text(
+                                    text = "+ ₹${item.formattedAmount}",
+                                    color = Color(0xFF34D399),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
+            // Privacy and Safety Footer
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { showPrivacyPolicyDialog = true }
-                    .padding(vertical = 3.dp),
+                    .padding(vertical = 3.dp)
+                    .clickable { showPrivacyPolicyDialog = true },
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1005,45 +1014,23 @@ fun SoundboxApp(
                     imageVector = Icons.Default.Security,
                     contentDescription = null,
                     tint = Color(0xFF34D399),
-                    modifier = Modifier.size(13.dp)
+                    modifier = Modifier.size(11.dp)
                 )
-                Spacer(modifier = Modifier.width(5.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Text(
                     text = "100% On-Device Privacy • Tap to View Policy",
                     color = Color(0xFF38BDF8),
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
 
-            // AdMob Banner Ad (Test Ad #1): Permanently pinned at bottom
-            Spacer(modifier = Modifier.height(4.dp))
-            AdMobBanner(
+            // Real Google AdMob Banner Ad View
+            AdMobBannerView(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp)
             )
         }
-    }
-}
-
-@Composable
-fun PeriodTab(
-    label: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = if (isSelected) Color(0xFF10B981) else Color(0xFF0F172A),
-        modifier = Modifier.clickable { onClick() }
-    ) {
-        Text(
-            text = label,
-            color = if (isSelected) Color.White else Color(0xFF94A3B8),
-            fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-        )
     }
 }
