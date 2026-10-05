@@ -406,20 +406,23 @@ fun SoundboxApp(
     }
 
     Surface(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding(),
         color = Color(0xFF0F172A)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(14.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Header
+            // Header: Title and Policy
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 2.dp, bottom = 6.dp),
+                    .padding(top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -428,7 +431,7 @@ fun SoundboxApp(
                         Text(
                             text = "UPI Sound Box",
                             color = Color.White,
-                            fontSize = 17.sp,
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.width(6.dp))
@@ -463,99 +466,100 @@ fun SoundboxApp(
                     )
                 }
 
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    // Unified Alerts Button: Supports Enable (Grant Permission) and Disable / Re-enable Alerts!
+                if (!isBatteryOptIgnored) {
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = when {
-                            !isNotificationAccessGranted -> Color(0xFF7C2D12)
-                            isAlertsActive -> Color(0xFF064E3B)
-                            else -> Color(0xFF334155)
-                        },
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            when {
-                                !isNotificationAccessGranted -> Color(0xFFEF4444)
-                                isAlertsActive -> Color(0xFF10B981)
-                                else -> Color(0xFF64748B)
-                            }
-                        ),
-                        modifier = Modifier.clickable {
-                            if (!isNotificationAccessGranted) {
-                                onRequestNotificationAccess()
-                            } else {
-                                val nextState = !isAlertsActive
-                                isAlertsActive = nextState
-                                PaymentStorage.setAlertsEnabled(context, nextState)
-                                if (nextState) {
-                                    Toast.makeText(context, "🔔 UPI Voice Alerts: ON", Toast.LENGTH_SHORT).show()
-                                    onTestSpeech("10")
-                                } else {
-                                    Toast.makeText(context, "🔕 UPI Voice Alerts: PAUSED", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF7C2D12),
+                        modifier = Modifier.clickable { onRequestBatteryOptimization() }
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = when {
-                                    !isNotificationAccessGranted -> Icons.Default.Warning
-                                    isAlertsActive -> Icons.Default.Notifications
-                                    else -> Icons.Default.Notifications
-                                },
-                                contentDescription = null,
-                                tint = when {
-                                    !isNotificationAccessGranted -> Color(0xFFF87171)
-                                    isAlertsActive -> Color(0xFF34D399)
-                                    else -> Color(0xFF94A3B8)
-                                },
-                                modifier = Modifier.size(15.dp)
+                                imageVector = Icons.Default.BatteryChargingFull,
+                                contentDescription = "Battery Optimization",
+                                tint = Color(0xFFF87171),
+                                modifier = Modifier.size(13.dp)
                             )
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = when {
-                                    !isNotificationAccessGranted -> "Enable Alerts"
-                                    isAlertsActive -> "Alerts: ON"
-                                    else -> "Alerts: OFF"
-                                },
-                                color = when {
-                                    !isNotificationAccessGranted -> Color(0xFFFECACA)
-                                    isAlertsActive -> Color(0xFFA7F3D0)
-                                    else -> Color(0xFFCBD5E1)
-                                },
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text("Battery", color = Color(0xFFFECACA), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                     }
+                }
+            }
 
-                    if (!isBatteryOptIgnored) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF7C2D12),
-                            modifier = Modifier.clickable { onRequestBatteryOptimization() }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.BatteryChargingFull,
-                                    contentDescription = "Battery Optimization",
-                                    tint = Color(0xFFF87171),
-                                    modifier = Modifier.size(14.dp)
-                                )
+            // Prominent Centered Voice Alerts Status Bar (Safely below status bar, centered, 100% visible)
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = when {
+                    !isNotificationAccessGranted -> Color(0xFF7C2D12)
+                    isAlertsActive -> Color(0xFF064E3B)
+                    else -> Color(0xFF1E293B)
+                },
+                border = androidx.compose.foundation.BorderStroke(
+                    1.5.dp,
+                    when {
+                        !isNotificationAccessGranted -> Color(0xFFEF4444)
+                        isAlertsActive -> Color(0xFF10B981)
+                        else -> Color(0xFF64748B)
+                    }
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .clickable {
+                        if (!isNotificationAccessGranted) {
+                            onRequestNotificationAccess()
+                        } else {
+                            val nextState = !isAlertsActive
+                            isAlertsActive = nextState
+                            PaymentStorage.setAlertsEnabled(context, nextState)
+                            if (nextState) {
+                                Toast.makeText(context, "🔔 UPI Voice Alerts: ON", Toast.LENGTH_SHORT).show()
+                                onTestSpeech("10")
+                            } else {
+                                Toast.makeText(context, "🔕 UPI Voice Alerts: PAUSED", Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = when {
+                            !isNotificationAccessGranted -> Icons.Default.Warning
+                            isAlertsActive -> Icons.Default.CheckCircle
+                            else -> Icons.Default.Notifications
+                        },
+                        contentDescription = null,
+                        tint = when {
+                            !isNotificationAccessGranted -> Color(0xFFF87171)
+                            isAlertsActive -> Color(0xFF34D399)
+                            else -> Color(0xFF94A3B8)
+                        },
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = when {
+                            !isNotificationAccessGranted -> "⚠️ Allow Notifications • Tap to Enable"
+                            isAlertsActive -> "🟢 Sound Box: ACTIVE (Tap to Pause Alerts)"
+                            else -> "⏸️ Sound Box: PAUSED (Tap to Turn ON)"
+                        },
+                        color = when {
+                            !isNotificationAccessGranted -> Color(0xFFFECACA)
+                            isAlertsActive -> Color(0xFFA7F3D0)
+                            else -> Color(0xFFE2E8F0)
+                        },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 
