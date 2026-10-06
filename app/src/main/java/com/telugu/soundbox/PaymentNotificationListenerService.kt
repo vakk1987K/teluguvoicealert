@@ -1,11 +1,17 @@
 package com.telugu.soundbox
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.PowerManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import androidx.core.app.NotificationCompat
 
 class PaymentNotificationListenerService : NotificationListenerService() {
 
@@ -22,24 +28,24 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             "com.paytm.business",
             "com.mobikwik_new",
             "com.mobikwik.zaakpay.merchant",
-            "in.org.npci.upiapp",
+            "in.org.npci.upiapp", // BHIM
             "com.bharatpe.app",
-            "com.dreamplug.androidapp",
+            "com.dreamplug.androidapp", // CRED
             "com.whatsapp",
             "in.amazon.mShop.android.shopping",
             "com.freecharge.android",
             "com.myairtelapp",
             "com.jio.myjio",
-            "com.sbi.lotusintouch",
-            "com.sbi.upi",
-            "com.snapwork.hdfc",
-            "com.csam.icici.bank.imobile",
-            "com.axis.mobile",
-            "com.msf.kbank.mobile",
-            "com.canarabank.mobility",
-            "com.fss.pnb",
-            "com.bankofbaroda.mconnect",
-            "com.unionbank.ecommerce.mobile.android"
+            "com.sbi.lotusintouch", // YONO SBI
+            "com.sbi.upi", // BHIM SBI
+            "com.snapwork.hdfc", // HDFC
+            "com.csam.icici.bank.imobile", // ICICI
+            "com.axis.mobile", // Axis
+            "com.msf.kbank.mobile", // Kotak
+            "com.canarabank.mobility", // Canara
+            "com.fss.pnb", // PNB
+            "com.bankofbaroda.mconnect", // BOB
+            "com.unionbank.ecommerce.mobile.android" // Union
         )
 
         private val recentNotificationKeys = mutableMapOf<String, Long>()
@@ -76,6 +82,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         }
 
         val extras = notification.extras ?: return
+
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
@@ -117,20 +124,80 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 rawText = combinedContent
             )
 
-            if (addedPayment == null) return
+            if (addedPayment == null) {
+                return
+            }
 
-            var wakeLock: PowerManager.WakeLock? = null
+            Log.i(TAG, "Credit detected via notification! Amount: ₹${payment.formattedAmount}, Payer: ${payment.payerName}, App: ${payment.bank}")
+
+            // 1. Wake up screen and keep CPU active for speech
+            var cpuWakeLock: PowerManager.WakeLock? = null
+            var screenWakeLock: PowerManager.WakeLock? = null
             try {
                 val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
-                wakeLock = powerManager?.newWakeLock(
-                    PowerManager.PARTIAL_WAKE_LOCK,
-                    "TeluguSoundbox::NotificationWakeLock"
-                )
-                wakeLock?.acquire(30000L)
+                if (powerManager != null) {
+                    cpuWakeLock = powerManager.newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK,
+                        "TeluguSoundbox::CpuLock"
+                    )
+                    cpuWakeLock?.acquire(25000L)
+
+                    @Suppress("DEPRECATION")
+                    screenWakeLock = powerManager.newWakeLock(
+                        PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                                PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                                PowerManager.ON_AFTER_RELEASE,
+                        "TeluguSoundbox::ScreenWake"
+                    )
+                    screenWakeLock?.acquire(6000L)
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "WakeLock error: ${e.message}")
             }
 
+            // 2. Post high-priority lock screen notification (100% compliant with Android 14 & 15 background policies)
+            try {
+                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                val alertChannelId = "upi_payment_alert_channel"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val channel = NotificationChannel(
+                        alertChannelId,
+                        "Payment Voice Alerts",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Displays payment amount on lock screen"
+                        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                        enableVibration(true)
+                    }
+                    notificationManager?.createNotificationChannel(channel)
+                }
+
+                val openIntent = Intent(applicationContext, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                }
+                val pendingIntent = PendingIntent.getActivity(
+                    applicationContext,
+                    System.currentTimeMillis().toInt(),
+                    openIntent,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+                )
+
+                val alertNotification = NotificationCompat.Builder(applicationContext, alertChannelId)
+                    .setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
+                    .setContentTitle("₹${payment.formattedAmount} Received!")
+                    .setContentText("${payment.bank} • ${payment.payerName ?: "UPI Customer"}")
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setAutoCancel(true)
+                    .setContentIntent(pendingIntent)
+                    .build()
+
+                notificationManager?.notify(2002, alertNotification)
+            } catch (e: Exception) {
+                Log.w(TAG, "Notification post error: ${e.message}")
+            }
+
+            // 3. Update in-app UI if app is open
             try {
                 val uiIntent = Intent(PaymentStorage.ACTION_NEW_PAYMENT).apply {
                     putExtra(PaymentStorage.EXTRA_AMOUNT, payment.formattedAmount)
@@ -144,19 +211,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 Log.w(TAG, "UI broadcast error: ${e.message}")
             }
 
-            try {
-                val launchIntent = Intent(applicationContext, MainActivity::class.java).apply {
-                    addFlags(
-                        Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    )
-                }
-                applicationContext.startActivity(launchIntent)
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not bring MainActivity to lockscreen: ${e.message}")
-            }
-
+            // 4. Speak out loud in natural Indian language (Always runs!)
             if (PaymentStorage.isAlertsEnabled(applicationContext)) {
                 TeluguTtsManager.announcePayment(
                     context = applicationContext,
@@ -164,13 +219,16 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                     payerName = payment.payerName,
                     onComplete = {
                         try {
-                            if (wakeLock?.isHeld == true) wakeLock.release()
+                            if (cpuWakeLock?.isHeld == true) cpuWakeLock.release()
+                            if (screenWakeLock?.isHeld == true) screenWakeLock.release()
                         } catch (e: Exception) {}
                     }
                 )
             } else {
+                Log.d(TAG, "Voice alerts currently disabled by merchant, skipping TTS")
                 try {
-                    if (wakeLock?.isHeld == true) wakeLock.release()
+                    if (cpuWakeLock?.isHeld == true) cpuWakeLock.release()
+                    if (screenWakeLock?.isHeld == true) screenWakeLock.release()
                 } catch (e: Exception) {}
             }
         }
