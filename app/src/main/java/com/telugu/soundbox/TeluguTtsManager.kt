@@ -322,10 +322,6 @@ object LanguageManager {
         TeluguTtsManager.setLanguage(context, language)
     }
 
-    /**
-     * Converts numeric amount (e.g. 7500) into native, grammatically correct
-     * Indian spoken words so Text-To-Speech never reads digit-by-digit or cuts off!
-     */
     fun getAnnouncementSentence(
         language: SoundboxLanguage,
         amountStr: String
@@ -375,6 +371,19 @@ object TeluguTtsManager {
     private var activeWakeLock: PowerManager.WakeLock? = null
     private var audioFocusRequest: Any? = null
 
+    private fun getPreferredEngine(context: Context): String? {
+        return try {
+            val engines = TextToSpeech(context, null).engines
+            if (engines.any { it.name == "com.google.android.tts" }) {
+                "com.google.android.tts"
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun init(context: Context, onReady: (() -> Unit)? = null) {
         val appContext = context.applicationContext
 
@@ -404,7 +413,7 @@ object TeluguTtsManager {
 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                         val audioAttributes = AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                             .build()
                         tts?.setAudioAttributes(audioAttributes)
@@ -435,8 +444,8 @@ object TeluguTtsManager {
                         pendingQueue.clear()
                     }
                 } else {
-                    Log.w(TAG, "Failed to initialize default TextToSpeech, attempting Google TTS")
-                    tts = TextToSpeech(appContext, { fallbackStatus ->
+                    Log.w(TAG, "Preferred TTS init failed, trying system fallback...")
+                    tts = TextToSpeech(appContext) { fallbackStatus ->
                         if (fallbackStatus == TextToSpeech.SUCCESS) {
                             applyLanguage(currentLanguage)
                             isInitialized = true
@@ -449,11 +458,16 @@ object TeluguTtsManager {
                                 try { cb.invoke() } catch (e: Exception) {}
                             }
                         }
-                    }, "com.google.android.tts")
+                    }
                 }
             }
 
-            tts = TextToSpeech(appContext, listener)
+            val preferredEngine = getPreferredEngine(appContext)
+            tts = if (preferredEngine != null) {
+                TextToSpeech(appContext, listener, preferredEngine)
+            } else {
+                TextToSpeech(appContext, listener)
+            }
         }
     }
 
@@ -467,17 +481,17 @@ object TeluguTtsManager {
     }
 
     private fun applyLanguage(language: SoundboxLanguage) {
-        val result = tts?.setLanguage(language.locale)
-        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-            Log.w(TAG, "Voice data for ${language.displayName} missing/unsupported, attempting country fallback")
-            val fallbackLocale = Locale(language.code)
-            val fallbackResult = tts?.setLanguage(fallbackLocale)
-            if (fallbackResult == TextToSpeech.LANG_MISSING_DATA || fallbackResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-                Log.w(TAG, "Fallback locale also unsupported, keeping system default")
-                tts?.language = Locale.getDefault()
+        try {
+            val result = tts?.setLanguage(language.locale)
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                val fallbackLocale = Locale(language.code)
+                val fallbackResult = tts?.setLanguage(fallbackLocale)
+                if (fallbackResult == TextToSpeech.LANG_MISSING_DATA || fallbackResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    tts?.language = Locale("en", "IN")
+                }
             }
-        } else {
-            Log.i(TAG, "TTS language set to ${language.displayName} (${language.locale})")
+        } catch (e: Exception) {
+            Log.w(TAG, "Language set error: ${e.message}")
         }
     }
 
@@ -500,10 +514,6 @@ object TeluguTtsManager {
         }
     }
 
-    /**
-     * Announce incoming payment with chime and amount-only voice.
-     * Uses natural Indian words (e.g. 7500 -> "ఏడు వేల ఐదు వందల రూపాయలు")
-     */
     fun announcePayment(
         context: Context,
         amount: String,
@@ -515,30 +525,61 @@ object TeluguTtsManager {
 
         wakeUpDevice(appContext)
 
-        val sentence = LanguageManager.getAnnouncementSentence(language, amount)
-
-        // 1. Play crisp two-tone bell chime using native Android hardware ToneGenerator (instant, lockscreen-safe)
         try {
-            val toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+            val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            if (audioManager != null) {
+                val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                if (currentVol < (maxVol * 0.4)) {
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (maxVol * 0.75).toInt(), 0)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Volume boost error: ${e.message}")
+        }
+
+        val isLangSupported = try {
+            val availability = tts?.isLanguageAvailable(language.locale)
+            availability != null && availability >= TextToSpeech.LANG_AVAILABLE
+        } catch (e: Exception) {
+            false
+        }
+
+        val sentence = if (isLangSupported || language == SoundboxLanguage.ENGLISH) {
+            LanguageManager.getAnnouncementSentence(language, amount)
+        } else {
+            val cleanNum = amount.replace(",", "")
+            "Received $cleanNum rupees on ${payerName?.ifBlank { "UPI" } ?: "UPI"}"
+        }
+
+        try {
+            val toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
             toneGen.startTone(ToneGenerator.TONE_PROP_BEEP2, 220)
             mainHandler.postDelayed({
                 try {
                     toneGen.release()
                 } catch (e: Exception) {}
-            }, 1000L)
+            }, 800L)
         } catch (e: Exception) {
             Log.w(TAG, "ToneGenerator error: ${e.message}")
         }
 
-        // 2. Schedule speech immediately after chime (260ms delay) - Fully reliable on Android 14 and 15
         mainHandler.postDelayed({
             if (!isInitialized || tts == null) {
                 init(appContext) {
-                    applyLanguage(language)
+                    if (isLangSupported) {
+                        applyLanguage(language)
+                    } else {
+                        tts?.language = Locale("en", "IN")
+                    }
                     speakText(appContext, sentence, onComplete)
                 }
             } else {
-                applyLanguage(language)
+                if (isLangSupported) {
+                    applyLanguage(language)
+                } else {
+                    tts?.language = Locale("en", "IN")
+                }
                 speakText(appContext, sentence, onComplete)
             }
         }, 260L)
@@ -591,11 +632,13 @@ object TeluguTtsManager {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             val params = Bundle()
+            params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
             params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
         } else {
             val params = HashMap<String, String>()
             params[TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID] = utteranceId
+            params[TextToSpeech.Engine.KEY_PARAM_STREAM] = AudioManager.STREAM_MUSIC.toString()
             params[TextToSpeech.Engine.KEY_PARAM_VOLUME] = "1.0"
             @Suppress("DEPRECATION")
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params)
@@ -606,7 +649,7 @@ object TeluguTtsManager {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val playbackAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build()
             val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
