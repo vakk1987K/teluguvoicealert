@@ -48,6 +48,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             "com.unionbank.ecommerce.mobile.android" // Union
         )
 
+        // Cache recently processed notification keys to prevent duplicate triggers from Android notification updates
         private val recentNotificationKeys = mutableMapOf<String, Long>()
     }
 
@@ -55,6 +56,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         super.onListenerConnected()
         Log.i(TAG, "UPI Sound Box Notification Listener CONNECTED successfully to Android OS!")
         SoundboxForegroundService.startService(applicationContext)
+        TeluguTtsManager.init(applicationContext)
     }
 
     override fun onListenerDisconnected() {
@@ -68,11 +70,14 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         val packageName = sbn.packageName ?: return
         val notification = sbn.notification ?: return
 
+        // Deduplication of identical notification updates:
+        // When PhonePe or GPay updates an existing notification (e.g. 200ms later), ignore it!
         val notifKey = "${sbn.key}_${sbn.id}"
         val now = System.currentTimeMillis()
         synchronized(recentNotificationKeys) {
             val lastSeen = recentNotificationKeys[notifKey]
             if (lastSeen != null && (now - lastSeen) < 15000L) {
+                Log.d(TAG, "Skipping notification update for existing key $notifKey")
                 return
             }
             recentNotificationKeys[notifKey] = now
@@ -81,8 +86,16 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             }
         }
 
+        // Check if from UPI / merchant / banking app OR general notification
+        val isMonitoredApp = MONITORED_PACKAGES.contains(packageName) ||
+                packageName.contains("upi", ignoreCase = true) ||
+                packageName.contains("pay", ignoreCase = true) ||
+                packageName.contains("bank", ignoreCase = true) ||
+                packageName.contains("paisa", ignoreCase = true)
+
         val extras = notification.extras ?: return
 
+        // Extract text from both primary notification AND public lock screen version if available
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
@@ -93,12 +106,15 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
             ?.joinToString(" ") { it.toString() } ?: ""
 
+        // Check publicVersion if lock screen hides sensitive content
         val publicNotification = notification.publicVersion
         val publicText = publicNotification?.extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
         val publicTitle = publicNotification?.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
 
         val combinedContent = "$title $titleBig $text $bigText $subText $lines $ticker $publicTitle $publicText".trim()
         if (combinedContent.isBlank()) return
+
+        Log.d(TAG, "Processing notification from [$packageName]: $combinedContent")
 
         val defaultProvider = when {
             packageName.contains("phonepe") -> "PhonePe"
@@ -109,12 +125,16 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             else -> ""
         }
 
+        // Parse payment details
         val payment = TransactionParser.parse(combinedContent, defaultProvider)
         if (payment != null && payment.isCredit && payment.amount > 0) {
+            // Deduplication: if another app (PhonePe, GPay, Paytm, MobiKwik) or Bank SMS already alerted within 45s, skip!
             if (PaymentStorage.isDuplicate(applicationContext, payment.amount, payment.formattedAmount)) {
+                Log.d(TAG, "Duplicate payment detected from notification (₹${payment.formattedAmount}), skipping voice alert")
                 return
             }
 
+            // Save to lightweight storage. If addPayment returns null, it was an existing duplicate -> skip!
             val addedPayment = PaymentStorage.addPayment(
                 context = applicationContext,
                 amount = payment.amount,
@@ -125,6 +145,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             )
 
             if (addedPayment == null) {
+                Log.d(TAG, "Payment of ₹${payment.formattedAmount} was already added, skipping duplicate voice & UI update")
                 return
             }
 
