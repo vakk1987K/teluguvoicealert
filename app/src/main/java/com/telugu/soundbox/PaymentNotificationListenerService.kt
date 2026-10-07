@@ -71,7 +71,6 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         val notification = sbn.notification ?: return
 
         // Deduplication of identical notification updates:
-        // When PhonePe or GPay updates an existing notification (e.g. 200ms later), ignore it!
         val notifKey = "${sbn.key}_${sbn.id}"
         val now = System.currentTimeMillis()
         synchronized(recentNotificationKeys) {
@@ -232,25 +231,16 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 Log.w(TAG, "UI broadcast error: ${e.message}")
             }
 
-            // 4. Speak out loud in natural Indian language (Always runs!)
+            // 4. Speak out loud in natural Indian language with foreground execution priority
             if (PaymentStorage.isAlertsEnabled(applicationContext)) {
-                TeluguTtsManager.announcePayment(
+                // Route through Foreground Service to prevent OS sleep when screen is locked
+                SoundboxForegroundService.announce(
                     context = applicationContext,
                     amount = payment.formattedAmount,
-                    payerName = payment.payerName,
-                    onComplete = {
-                        try {
-                            if (cpuWakeLock?.isHeld == true) cpuWakeLock.release()
-                            if (screenWakeLock?.isHeld == true) screenWakeLock.release()
-                        } catch (e: Exception) {}
-                    }
+                    payerName = payment.payerName
                 )
             } else {
                 Log.d(TAG, "Voice alerts currently disabled by merchant, skipping TTS")
-                try {
-                    if (cpuWakeLock?.isHeld == true) cpuWakeLock.release()
-                    if (screenWakeLock?.isHeld == true) screenWakeLock.release()
-                } catch (e: Exception) {}
             }
         }
     }
