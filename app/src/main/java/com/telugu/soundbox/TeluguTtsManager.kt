@@ -511,8 +511,11 @@ object TeluguTtsManager {
 
         mainHandler.post {
             try {
-                // Initialize TextToSpeech directly on Application Context
-                tts = TextToSpeech(appContext) { status ->
+                // If Google TTS is available, prefer it because it synthesizes reliably in background while screen is locked
+                val preferredEngine = getPreferredTtsEngine(appContext)
+                Log.i(TAG, "Initializing TextToSpeech with engine: ${preferredEngine ?: "system default"}")
+
+                val onInitListener = TextToSpeech.OnInitListener { status ->
                     synchronized(lock) {
                         isInitializing = false
                     }
@@ -520,10 +523,10 @@ object TeluguTtsManager {
                         isInitialized = true
                         Log.i(TAG, "TextToSpeech initialized successfully!")
 
-                        // Standard USAGE_MEDIA so audio ALWAYS routes to the main speaker
+                        // Standard USAGE_ASSISTANCE_NAVIGATION_GUIDANCE ensures audio routes to loudspeaker even when screen is locked
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                             val audioAttributes = AudioAttributes.Builder()
-                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
                                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                                 .build()
                             tts?.setAudioAttributes(audioAttributes)
@@ -551,11 +554,37 @@ object TeluguTtsManager {
                         }
                     } else {
                         Log.e(TAG, "TextToSpeech initialization failed with status: $status")
-                        synchronized(lock) {
-                            isInitialized = false
-                            isInitializing = false
+                        // Fallback retry with default engine if preferred engine failed
+                        if (preferredEngine != null) {
+                            Log.w(TAG, "Retrying TTS init with system default engine")
+                            mainHandler.post {
+                                try {
+                                    tts = TextToSpeech(appContext) { fallbackStatus ->
+                                        synchronized(lock) {
+                                            isInitializing = false
+                                            isInitialized = (fallbackStatus == TextToSpeech.SUCCESS)
+                                        }
+                                        if (fallbackStatus == TextToSpeech.SUCCESS) {
+                                            applyLanguage(currentLanguage)
+                                        }
+                                    }
+                                } catch (ex: Exception) {
+                                    Log.e(TAG, "Fallback TTS init error: ${ex.message}")
+                                }
+                            }
+                        } else {
+                            synchronized(lock) {
+                                isInitialized = false
+                                isInitializing = false
+                            }
                         }
                     }
+                }
+
+                tts = if (preferredEngine != null) {
+                    TextToSpeech(appContext, onInitListener, preferredEngine)
+                } else {
+                    TextToSpeech(appContext, onInitListener)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error creating TextToSpeech: ${e.message}")
@@ -564,6 +593,16 @@ object TeluguTtsManager {
                     isInitialized = false
                 }
             }
+        }
+    }
+
+    private fun getPreferredTtsEngine(context: Context): String? {
+        return try {
+            val pm = context.packageManager
+            pm.getPackageInfo("com.google.android.tts", 0)
+            "com.google.android.tts"
+        } catch (e: Exception) {
+            null
         }
     }
 
@@ -785,7 +824,7 @@ object TeluguTtsManager {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val playbackAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build()
             val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
@@ -817,21 +856,41 @@ object TeluguTtsManager {
         }
     }
 
+    private var cpuWakeLock: PowerManager.WakeLock? = null
+    private var screenWakeLock: PowerManager.WakeLock? = null
+
     private fun wakeUpDevice(context: Context) {
         try {
             val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
             if (powerManager != null) {
-                if (activeWakeLock?.isHeld == true) {
-                    activeWakeLock?.release()
+                // 1. PARTIAL_WAKE_LOCK keeps CPU awake so audio & TTS synthesizes immediately even if screen is dark!
+                if (cpuWakeLock?.isHeld == true) {
+                    cpuWakeLock?.release()
                 }
-                @Suppress("DEPRECATION")
-                activeWakeLock = powerManager.newWakeLock(
-                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-                            PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                            PowerManager.ON_AFTER_RELEASE,
-                    "TeluguSoundbox:TtsWakeLock"
-                )
-                activeWakeLock?.acquire(15000L)
+                cpuWakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "TeluguSoundbox:CpuWakeLock"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire(25000L) // 25s safety timeout
+                }
+
+                // 2. Light up screen so merchant sees the lockscreen payment notification
+                try {
+                    if (screenWakeLock?.isHeld == true) {
+                        screenWakeLock?.release()
+                    }
+                    @Suppress("DEPRECATION")
+                    screenWakeLock = powerManager.newWakeLock(
+                        PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                                PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                                PowerManager.ON_AFTER_RELEASE,
+                        "TeluguSoundbox:ScreenWakeLock"
+                    ).apply {
+                        setReferenceCounted(false)
+                        acquire(5000L)
+                    }
+                } catch (e: Exception) {}
             }
         } catch (e: Exception) {
             Log.w(TAG, "WakeLock acquire error: ${e.message}")
@@ -840,10 +899,15 @@ object TeluguTtsManager {
 
     private fun releaseWakeLock() {
         try {
-            if (activeWakeLock?.isHeld == true) {
-                activeWakeLock?.release()
+            if (cpuWakeLock?.isHeld == true) {
+                cpuWakeLock?.release()
             }
-            activeWakeLock = null
+            cpuWakeLock = null
+
+            if (screenWakeLock?.isHeld == true) {
+                screenWakeLock?.release()
+            }
+            screenWakeLock = null
         } catch (e: Exception) {}
     }
 }
