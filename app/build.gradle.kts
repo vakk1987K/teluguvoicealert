@@ -11,8 +11,8 @@ android {
         applicationId = "com.telugu.soundbox"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "2.0.7"
+        versionCode = 19
+        versionName = "1.1.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
