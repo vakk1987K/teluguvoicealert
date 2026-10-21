@@ -48,10 +48,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             "com.unionbank.ecommerce.mobile.android" // Union
         )
 
-        // Cache recently processed notification keys to prevent duplicate triggers from Android notification updates
         private val recentNotificationKeys = mutableMapOf<String, Long>()
-
-        // Retain wakelock at companion level so it is not finalized when onNotificationPosted returns
         private var listenerCpuWakeLock: PowerManager.WakeLock? = null
         private var listenerScreenWakeLock: PowerManager.WakeLock? = null
     }
@@ -74,13 +71,11 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         val packageName = sbn.packageName ?: return
         val notification = sbn.notification ?: return
 
-        // Deduplication of identical notification updates:
-        // When PhonePe or GPay updates an existing notification (e.g. 200ms later), ignore it!
         val notifKey = "${sbn.key}_${sbn.id}"
         val now = System.currentTimeMillis()
         synchronized(recentNotificationKeys) {
             val lastSeen = recentNotificationKeys[notifKey]
-            if (lastSeen != null && (now - lastSeen) < 15000L) {
+            if (lastSeen != null && (now - lastSeen) < 10000L) {
                 Log.d(TAG, "Skipping notification update for existing key $notifKey")
                 return
             }
@@ -90,7 +85,6 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             }
         }
 
-        // Check if from UPI / merchant / banking app OR general notification
         val isMonitoredApp = MONITORED_PACKAGES.contains(packageName) ||
                 packageName.contains("upi", ignoreCase = true) ||
                 packageName.contains("pay", ignoreCase = true) ||
@@ -99,18 +93,15 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
         val extras = notification.extras ?: return
 
-        // Extract text from both primary notification AND public lock screen version if available
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
         val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString() ?: ""
         val titleBig = extras.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString() ?: ""
         val ticker = notification.tickerText?.toString() ?: ""
-
         val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
             ?.joinToString(" ") { it.toString() } ?: ""
 
-        // Check publicVersion if lock screen hides sensitive content
         val publicNotification = notification.publicVersion
         val publicText = publicNotification?.extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
         val publicTitle = publicNotification?.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
@@ -129,16 +120,16 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             else -> ""
         }
 
-        // Parse payment details
         val payment = TransactionParser.parse(combinedContent, defaultProvider)
+
         if (payment != null && payment.isCredit && payment.amount > 0) {
-            // Deduplication: if another app (PhonePe, GPay, Paytm, MobiKwik) or Bank SMS already alerted within 45s, skip!
+            // Deduplication: if another app or Bank SMS already alerted within 8s, skip!
             if (PaymentStorage.isDuplicate(applicationContext, payment.amount, payment.formattedAmount)) {
                 Log.d(TAG, "Duplicate payment detected from notification (₹${payment.formattedAmount}), skipping voice alert")
                 return
             }
 
-            // Save to lightweight storage. If addPayment returns null, it was an existing duplicate -> skip!
+            // Save to lightweight storage
             val addedPayment = PaymentStorage.addPayment(
                 context = applicationContext,
                 amount = payment.amount,
@@ -147,7 +138,6 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 bank = payment.bank,
                 rawText = combinedContent
             )
-
             if (addedPayment == null) {
                 Log.d(TAG, "Payment of ₹${payment.formattedAmount} was already added, skipping duplicate voice & UI update")
                 return
@@ -155,7 +145,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
             Log.i(TAG, "Credit detected via notification! Amount: ₹${payment.formattedAmount}, Payer: ${payment.payerName}, App: ${payment.bank}")
 
-            // 1. Wake up screen and keep CPU active for speech
+            // 1. Wake up screen and hold CPU active immediately so audio synthesizes while phone is locked
             try {
                 val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
                 if (powerManager != null) {
@@ -192,7 +182,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 Log.w(TAG, "WakeLock error: ${e.message}")
             }
 
-            // 2. Post high-priority lock screen notification (100% compliant with Android 14 & 15 background policies)
+            // 2. Post high-priority lock screen notification (100% compliant with Android 14 & 15 & 16 background policies)
             try {
                 val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 val alertChannelId = "upi_payment_alert_channel"
@@ -248,7 +238,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 Log.w(TAG, "UI broadcast error: ${e.message}")
             }
 
-            // 4. Speak out loud immediately without waiting for any delayed background service intent
+            // 4. Speak out loud immediately without waiting for any delayed intent or power button press!
             if (PaymentStorage.isAlertsEnabled(applicationContext)) {
                 Log.i(TAG, "Triggering immediate lock-screen voice alert for ₹${payment.formattedAmount}")
                 TeluguTtsManager.announcePayment(
@@ -264,7 +254,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                         } catch (e: Exception) {}
                     }
                 )
-                // Also update persistent foreground service notification if running
+
                 SoundboxForegroundService.updateStatus(
                     context = applicationContext,
                     statusText = "₹${payment.formattedAmount} Received • Speaking now"
