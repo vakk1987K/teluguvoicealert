@@ -50,6 +50,10 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
         // Cache recently processed notification keys to prevent duplicate triggers from Android notification updates
         private val recentNotificationKeys = mutableMapOf<String, Long>()
+
+        // Retain wakelock at companion level so it is not finalized when onNotificationPosted returns
+        private var listenerCpuWakeLock: PowerManager.WakeLock? = null
+        private var listenerScreenWakeLock: PowerManager.WakeLock? = null
     }
 
     override fun onListenerConnected() {
@@ -71,6 +75,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         val notification = sbn.notification ?: return
 
         // Deduplication of identical notification updates:
+        // When PhonePe or GPay updates an existing notification (e.g. 200ms later), ignore it!
         val notifKey = "${sbn.key}_${sbn.id}"
         val now = System.currentTimeMillis()
         synchronized(recentNotificationKeys) {
@@ -151,25 +156,37 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             Log.i(TAG, "Credit detected via notification! Amount: ₹${payment.formattedAmount}, Payer: ${payment.payerName}, App: ${payment.bank}")
 
             // 1. Wake up screen and keep CPU active for speech
-            var cpuWakeLock: PowerManager.WakeLock? = null
-            var screenWakeLock: PowerManager.WakeLock? = null
             try {
                 val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
                 if (powerManager != null) {
-                    cpuWakeLock = powerManager.newWakeLock(
+                    if (listenerCpuWakeLock?.isHeld == true) {
+                        try { listenerCpuWakeLock?.release() } catch (e: Exception) {}
+                    }
+                    listenerCpuWakeLock = powerManager.newWakeLock(
                         PowerManager.PARTIAL_WAKE_LOCK,
-                        "TeluguSoundbox::CpuLock"
-                    )
-                    cpuWakeLock?.acquire(25000L)
+                        "TeluguSoundbox:ListenerCpuLock"
+                    ).apply {
+                        setReferenceCounted(false)
+                        acquire(30000L) // 30s safety timeout to cover complete speech
+                    }
 
-                    @Suppress("DEPRECATION")
-                    screenWakeLock = powerManager.newWakeLock(
-                        PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-                                PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                                PowerManager.ON_AFTER_RELEASE,
-                        "TeluguSoundbox::ScreenWake"
-                    )
-                    screenWakeLock?.acquire(6000L)
+                    try {
+                        if (listenerScreenWakeLock?.isHeld == true) {
+                            try { listenerScreenWakeLock?.release() } catch (e: Exception) {}
+                        }
+                        @Suppress("DEPRECATION")
+                        listenerScreenWakeLock = powerManager.newWakeLock(
+                            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                                    PowerManager.ON_AFTER_RELEASE,
+                            "TeluguSoundbox:ListenerScreenWake"
+                        ).apply {
+                            setReferenceCounted(false)
+                            acquire(6000L)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Screen wake error: ${e.message}")
+                    }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "WakeLock error: ${e.message}")
@@ -231,13 +248,26 @@ class PaymentNotificationListenerService : NotificationListenerService() {
                 Log.w(TAG, "UI broadcast error: ${e.message}")
             }
 
-            // 4. Speak out loud in natural Indian language with foreground execution priority
+            // 4. Speak out loud immediately without waiting for any delayed background service intent
             if (PaymentStorage.isAlertsEnabled(applicationContext)) {
-                // Route through Foreground Service to prevent OS sleep when screen is locked
-                SoundboxForegroundService.announce(
+                Log.i(TAG, "Triggering immediate lock-screen voice alert for ₹${payment.formattedAmount}")
+                TeluguTtsManager.announcePayment(
                     context = applicationContext,
                     amount = payment.formattedAmount,
-                    payerName = payment.payerName
+                    payerName = payment.payerName,
+                    onComplete = {
+                        try {
+                            if (listenerCpuWakeLock?.isHeld == true) {
+                                listenerCpuWakeLock?.release()
+                            }
+                            listenerCpuWakeLock = null
+                        } catch (e: Exception) {}
+                    }
+                )
+                // Also update persistent foreground service notification if running
+                SoundboxForegroundService.updateStatus(
+                    context = applicationContext,
+                    statusText = "₹${payment.formattedAmount} Received • Speaking now"
                 )
             } else {
                 Log.d(TAG, "Voice alerts currently disabled by merchant, skipping TTS")
