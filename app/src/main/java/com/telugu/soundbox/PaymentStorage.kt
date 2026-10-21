@@ -50,20 +50,20 @@ object PaymentStorage {
         getPrefs(context).edit().putBoolean(KEY_ALERTS_ENABLED, enabled).apply()
     }
 
-    // Deduplication window: 45 seconds ensures that if PhonePe, Google Pay, Paytm, MobiKwik,
-    // or Bank SMS all alert for the same payment, only ONE announcement and ONE record is stored.
+    // Deduplication window: 8 seconds ensures identical simultaneous notifications from UPI app + Bank SMS
+    // don't double-trigger, while allowing separate consecutive payments (e.g. testing ₹120 twice)
     private val recentProcessedAmounts = mutableMapOf<String, Long>()
-    private const val DEDUPLICATION_WINDOW_MS = 45000L
+    private const val DEDUPLICATION_WINDOW_MS = 8000L
 
     @Synchronized
     fun isDuplicate(context: Context, amount: Double, formattedAmount: String): Boolean {
         val now = System.currentTimeMillis()
         val normalized = normalizeAmount(formattedAmount)
 
-        // 1. Clean up entries older than 90 seconds
+        // 1. Clean up entries older than 30 seconds
         val iterator = recentProcessedAmounts.entries.iterator()
         while (iterator.hasNext()) {
-            if (now - iterator.next().value > 90000L) {
+            if (now - iterator.next().value > 30000L) {
                 iterator.remove()
             }
         }
@@ -86,7 +86,7 @@ object PaymentStorage {
             return true
         }
 
-        // Record this payment timestamp so subsequent duplicate alerts are ignored
+        // Record this payment timestamp so simultaneous duplicate broadcasts within 8s are ignored
         recentProcessedAmounts[normalized] = now
         return false
     }
@@ -128,7 +128,6 @@ object PaymentStorage {
         val existingDuplicate = currentList.firstOrNull { existing ->
             Math.abs(existing.amount - amount) < 0.01 && (now - existing.timestamp) < DEDUPLICATION_WINDOW_MS
         }
-
         if (existingDuplicate != null) {
             Log.w(TAG, "Prevented duplicate payment insertion for ₹$formattedAmount. Existing record ID: ${existingDuplicate.id}")
             return null
@@ -158,7 +157,6 @@ object PaymentStorage {
     fun getPayments(context: Context): List<StoredPayment> {
         val prefs = getPrefs(context)
         val jsonString = prefs.getString(KEY_PAYMENTS, null) ?: return emptyList()
-
         val list = mutableListOf<StoredPayment>()
         try {
             val jsonArray = JSONArray(jsonString)
@@ -168,91 +166,18 @@ object PaymentStorage {
                     StoredPayment(
                         id = obj.optString("id", ""),
                         amount = obj.optDouble("amount", 0.0),
-                        formattedAmount = obj.optString("formattedAmount", "0"),
+                        formattedAmount = obj.optString("formattedAmount", ""),
                         payerName = obj.optString("payerName", ""),
-                        bank = obj.optString("bank", "Bank"),
-                        timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                        bank = obj.optString("bank", ""),
+                        timestamp = obj.optLong("timestamp", 0L),
                         rawText = obj.optString("rawText", "")
                     )
                 )
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Error reading stored payments: ${e.message}")
         }
-
-        val deduped = mutableListOf<StoredPayment>()
-        for (item in list) {
-            val isDupe = deduped.any { existing ->
-                Math.abs(existing.amount - item.amount) < 0.01 &&
-                        Math.abs(existing.timestamp - item.timestamp) < DEDUPLICATION_WINDOW_MS
-            }
-            if (!isDupe) {
-                deduped.add(item)
-            }
-        }
-
-        return deduped
-    }
-
-    @Synchronized
-    fun getSummary(context: Context): PaymentSummary {
-        val payments = getPayments(context)
-        val now = System.currentTimeMillis()
-
-        val startOfToday = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
-
-        val sevenDaysAgo = now - (7L * 24 * 60 * 60 * 1000)
-        val fifteenDaysAgo = now - (15L * 24 * 60 * 60 * 1000)
-        val thirtyDaysAgo = now - (30L * 24 * 60 * 60 * 1000)
-
-        var todaySum = 0.0
-        var todayCount = 0
-
-        var sevenDaySum = 0.0
-        var sevenDayCount = 0
-
-        var fifteenDaySum = 0.0
-        var fifteenDayCount = 0
-
-        var thirtyDaySum = 0.0
-        var thirtyDayCount = 0
-
-        for (p in payments) {
-            if (p.timestamp >= startOfToday) {
-                todaySum += p.amount
-                todayCount++
-            }
-            if (p.timestamp >= sevenDaysAgo) {
-                sevenDaySum += p.amount
-                sevenDayCount++
-            }
-            if (p.timestamp >= fifteenDaysAgo) {
-                fifteenDaySum += p.amount
-                fifteenDayCount++
-            }
-            if (p.timestamp >= thirtyDaysAgo) {
-                thirtyDaySum += p.amount
-                thirtyDayCount++
-            }
-        }
-
-        return PaymentSummary(
-            today = PeriodSummary(todaySum, todayCount),
-            sevenDays = PeriodSummary(sevenDaySum, sevenDayCount),
-            fifteenDays = PeriodSummary(fifteenDaySum, fifteenDayCount),
-            thirtyDays = PeriodSummary(thirtyDaySum, thirtyDayCount)
-        )
-    }
-
-    @Synchronized
-    fun clearAll(context: Context) {
-        getPrefs(context).edit().remove(KEY_PAYMENTS).apply()
-        recentProcessedAmounts.clear()
+        return list
     }
 
     private fun saveList(context: Context, list: List<StoredPayment>) {
@@ -270,5 +195,66 @@ object PaymentStorage {
             jsonArray.put(obj)
         }
         getPrefs(context).edit().putString(KEY_PAYMENTS, jsonArray.toString()).apply()
+    }
+
+    @Synchronized
+    fun clearAll(context: Context) {
+        getPrefs(context).edit().remove(KEY_PAYMENTS).apply()
+        recentProcessedAmounts.clear()
+    }
+
+    fun getSummary(context: Context): PaymentSummary {
+        val list = getPayments(context)
+        val now = System.currentTimeMillis()
+
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val startOfToday = cal.timeInMillis
+
+        val sevenDaysAgo = now - (7L * 24 * 60 * 60 * 1000)
+        val fifteenDaysAgo = now - (15L * 24 * 60 * 60 * 1000)
+        val thirtyDaysAgo = now - (30L * 24 * 60 * 60 * 1000)
+
+        var todayAmt = 0.0
+        var todayCount = 0
+
+        var sevenAmt = 0.0
+        var sevenCount = 0
+
+        var fifteenAmt = 0.0
+        var fifteenCount = 0
+
+        var thirtyAmt = 0.0
+        var thirtyCount = 0
+
+        for (p in list) {
+            if (p.timestamp >= startOfToday) {
+                todayAmt += p.amount
+                todayCount++
+            }
+            if (p.timestamp >= sevenDaysAgo) {
+                sevenAmt += p.amount
+                sevenCount++
+            }
+            if (p.timestamp >= fifteenDaysAgo) {
+                fifteenAmt += p.amount
+                fifteenCount++
+            }
+            if (p.timestamp >= thirtyDaysAgo) {
+                thirtyAmt += p.amount
+                thirtyCount++
+            }
+        }
+
+        return PaymentSummary(
+            today = PeriodSummary(todayAmt, todayCount),
+            sevenDays = PeriodSummary(sevenAmt, sevenCount),
+            fifteenDays = PeriodSummary(fifteenAmt, fifteenCount),
+            thirtyDays = PeriodSummary(thirtyAmt, thirtyCount)
+        )
     }
 }
