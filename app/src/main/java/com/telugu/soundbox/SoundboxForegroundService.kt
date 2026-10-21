@@ -36,20 +36,35 @@ class SoundboxForegroundService : Service() {
         }
 
         fun announce(context: Context, amount: String, payerName: String?) {
-            val intent = Intent(context, SoundboxForegroundService::class.java).apply {
-                action = ACTION_ANNOUNCE
-                putExtra(EXTRA_AMOUNT, amount)
-                putExtra(EXTRA_PAYER, payerName)
-            }
+            // Direct TTS invocation so playback triggers immediately on locked screen without waiting for power button
+            TeluguTtsManager.announcePayment(context, amount, payerName)
+            updateStatus(context, "₹$amount Received • Speaking now")
+        }
+
+        fun updateStatus(context: Context, statusText: String) {
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
+                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                val openAppIntent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
                 }
+                val pendingIntent = PendingIntent.getActivity(
+                    context,
+                    0,
+                    openAppIntent,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+                )
+                val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setContentTitle("🔊 UPI Sound Box Active")
+                    .setContentText(statusText)
+                    .setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
+                    .setContentIntent(pendingIntent)
+                    .setOngoing(true)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .build()
+                notificationManager?.notify(NOTIFICATION_ID, notification)
             } catch (e: Exception) {
-                // Direct fallback if service invocation restricted
-                TeluguTtsManager.announcePayment(context, amount, payerName)
+                // Ignore notification update error
             }
         }
 
